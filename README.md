@@ -1,0 +1,1 @@
+Minor changes to 86Box network options for MacOS.  Implements support for Apple vmnet to provide vmnet NAT, vmnet HOST, vmnet BRIDGE options.  Leverages a priviledge helper which should be compiled and installed once using the supplied scripts.
