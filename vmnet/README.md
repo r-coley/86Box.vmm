@@ -4,12 +4,6 @@ This package turns the working vmnet helper into a LaunchDaemon-based service so
 MacBox/86Box can stay unprivileged and connect to a root-owned helper over a
 UNIX socket.
 
-## What changed in this fixed version
-
-The helper now stays alive and accepts multiple client sessions instead of
-handling one connection and exiting. That avoids the socket disappearing between
-VM runs.
-
 ## Layout
 
 - `src/vmnet_helper.m` - root helper that owns vmnet
@@ -43,7 +37,6 @@ sudo ./scripts/install-launchd.sh
 ```bash
 sudo ./scripts/uninstall-launchd.sh
 ```
-
 
 ## UI-supplied guest IP
 
