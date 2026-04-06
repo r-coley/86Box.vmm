@@ -38,9 +38,5 @@ sudo ./scripts/install-launchd.sh
 sudo ./scripts/uninstall-launchd.sh
 ```
 
-## UI-supplied guest IP
-
-`vmn_start_req_t` now includes a `guest_ip` field (IPv4 in network byte order). The helper no longer relies on a compiled-in guest IP.
-
 - Shared / Host / Bridged modes: the helper accepts and logs `guest_ip` for future use.
 - Published mode: `guest_ip` is required and is used when building PF/NAT rules.
