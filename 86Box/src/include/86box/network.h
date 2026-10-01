@@ -53,10 +53,10 @@
 #define NET_TYPE_NLSWITCH 5 /* use the local switch provider */
 #define NET_TYPE_NRSWITCH 6 /* use the remote switch provider */
 #ifdef __APPLE__
-#define NET_TYPE_VMNET_NAT	7 
-#define NET_TYPE_VMNET_HOST	8 
-#define NET_TYPE_VMNET_BRIDGE	9 
-#define NET_TYPE_VMNET_PUB	10 
+#define NET_TYPE_VMNET_NAT      7 /* Apple vmnet shared/NAT */
+#define NET_TYPE_VMNET_HOST     8 /* Apple vmnet host-only */
+#define NET_TYPE_VMNET_BRIDGE   9 /* Apple vmnet bridged */
+#define NET_TYPE_VMNET_PUB      10 /* Apple vmnet published */
 #endif
 
 #define NET_MAX_FRAME  1518
@@ -104,7 +104,9 @@ typedef struct netcard_conf_t {
     char     secret[256];
     uint8_t  promisc_mode;
     char     slirp_net[16];
+#ifdef __APPLE__
     char     vmnet_guest_ip[16];
+#endif
     char     nrs_hostname[128];
 } netcard_conf_t;
 
@@ -173,11 +175,17 @@ typedef struct {
     int has_pcap;
     int has_vde;
     int has_tap;
+#ifdef __APPLE__
     int has_vmnet;
+#endif
 } network_devmap_t;
 
 
+#ifdef __APPLE__
 #define HAS_NOSLIRP_NET(x)  (x.has_pcap || x.has_vde || x.has_tap || x.has_vmnet)
+#else
+#define HAS_NOSLIRP_NET(x)  (x.has_pcap || x.has_vde || x.has_tap)
+#endif
 
 #ifdef __cplusplus
 extern "C" {
@@ -202,10 +210,10 @@ extern void       network_tx(netcard_t *card, uint8_t *, int);
 
 extern int net_pcap_prepare(netdev_t *);
 extern int net_vde_prepare(void);
-
 #ifdef __APPLE__
 extern int net_vmnet_prepare(netdev_t *list);
 #endif
+
 
 extern void            network_connect(int id, int connect);
 extern int             network_is_connected(int id);
@@ -233,6 +241,11 @@ extern int network_rx_on_tx_put_pkt(netcard_t *card, netpkt_t *pkt);
 /* 3Com Etherlink */
 extern const device_t threec501_device;
 extern const device_t threec503_device;
+extern const device_t threec509b_device;
+extern const device_t threec529_mc_device;
+extern const device_t threec529_tp_device;
+extern const device_t threec592_device;
+extern const device_t threec597_device;
 
 /* Novell NE2000 and compatibles */
 extern const device_t ne1000_device;
@@ -245,24 +258,34 @@ extern const device_t rtl8019as_pnp_device;
 extern const device_t de220p_device;
 extern const device_t rtl8029as_device;
 
-/* AMD PCnet*/
+/* AMD PCnet */
 extern const device_t pcnet_am79c960_device;
 extern const device_t pcnet_am79c960_eb_device;
 extern const device_t pcnet_am79c960_vlb_device;
 extern const device_t pcnet_am79c961_device;
 extern const device_t pcnet_am79c970a_device;
+extern const device_t pcnet_am79c970a_onboard_device;
 extern const device_t pcnet_am79c973_device;
 extern const device_t pcnet_am79c973_onboard_device;
 
 /* Modem */
 extern const device_t modem_device;
 
-/* PLIP */
-extern const device_t lpt_plip_device;
+/* LPT */
+extern const device_t pe3_device;
 extern const device_t plip_device;
 
 /* Realtek RTL8139C+ */
 extern const device_t rtl8139c_plus_device;
+
+/* Intel 8255x */
+extern const device_t i82557_device;
+extern const device_t i82558_device;
+extern const device_t i82557b_onboard_device;
+extern const device_t i82558b_onboard_device;
+extern const device_t nec_pk_ug_x006_device;
+extern const device_t i82559c_onboard_device;
+extern const device_t i82559er_onboard_device;
 
 /* DEC Tulip */
 extern const device_t dec_tulip_device;
@@ -276,6 +299,9 @@ extern const device_t wd8013ebt_device;
 extern const device_t wd8003eta_device;
 extern const device_t wd8003ea_device;
 extern const device_t wd8013epa_device;
+extern const device_t ibm_ethernet_efd4_device;
+extern const device_t ibm_ethernet_efd5_device;
+extern const device_t ibm_ethernet_efe5_device;
 #endif
 
 #ifdef __cplusplus

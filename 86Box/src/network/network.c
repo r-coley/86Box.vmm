@@ -98,6 +98,8 @@ static const NETWORK_CARD net_cards[] = {
     { &ne1000_compat_device       },
     { &ne2000_compat_8bit_device  },
     { &ne1000_device              },
+    { &ne2000_device              },
+    { &rtl8019as_pnp_device       },
     { &wd8003e_device             },
     { &wd8003eb_device            },
     { &wd8013ebt_device           },
@@ -105,15 +107,23 @@ static const NETWORK_CARD net_cards[] = {
     { &modem_device               },
     /* LPT */
     { &plip_device                },
+    { &pe3_device                 },
     /* ISA16 */
+    { &threec509b_device          },
     { &pcnet_am79c960_device      },
     { &pcnet_am79c961_device      },
     { &de220p_device              },
     { &ne2000_compat_device       },
-    { &ne2000_device              },
     { &pcnet_am79c960_eb_device   },
-    { &rtl8019as_pnp_device       },
+    /* EISA */
+    { &threec592_device           },
+    { &threec597_device           },
     /* MCA */
+    { &threec529_mc_device        },
+    { &threec529_tp_device        },
+    { &ibm_ethernet_efe5_device   },
+    { &ibm_ethernet_efd5_device   },
+    { &ibm_ethernet_efd4_device   },
     { &ethernext_mc_device        },
     { &wd8003ea_device            },
     { &wd8003eta_device           },
@@ -126,6 +136,9 @@ static const NETWORK_CARD net_cards[] = {
     { &dec_tulip_21040_device     },
     { &dec_tulip_21140_device     },
     { &dec_tulip_device           },
+    { &i82557_device              },
+    { &i82558_device              },
+    { &nec_pk_ug_x006_device      },
     { &rtl8029as_device           },
     { &rtl8139c_plus_device       },
     { &smc_epic100_device         },
@@ -139,6 +152,14 @@ net_cards_migrate[] = {
     /* DECchip 21140 "Tulip FasterNet" */
     { .device = &dec_tulip_21140_device,                        .old_internal_name = "dec_21140_tulip"                },
     { .device = &dec_tulip_21140_device,                        .old_internal_name = "dec_21140_tulip_vpc"            },
+    /* Intel 8255x (PRO/100 family) */
+    { .device = &i82557_device,                                 .old_internal_name = "i82557b"                       },
+    { .device = &i82557_device,                                 .old_internal_name = "i82557c"                       },
+    { .device = &i82558_device,                                 .old_internal_name = "i82558b"                       },
+    { .device = &i82558_device,                                 .old_internal_name = "i82559a"                       },
+    { .device = &i82558_device,                                 .old_internal_name = "i82559b"                       },
+    { .device = &i82558_device,                                 .old_internal_name = "i82559c"                       },
+    { .device = &i82558_device,                                 .old_internal_name = "i82559er"                      },
     /* End of table */
     { .device = NULL,                                           .old_internal_name = ""                               }
   // clang-format on
@@ -152,13 +173,16 @@ network_devmap_t network_devmap = {0};
 int  network_ndev;
 netdev_t network_devs[NET_HOST_INTF_MAX];
 
-/* Local variables. */
-
 #ifdef __APPLE__
-#    define NET_TYPE_IS_VMNET(t) (((t) == NET_TYPE_VMNET_NAT) || ((t) == NET_TYPE_VMNET_HOST) || ((t) == NET_TYPE_VMNET_BRIDGE) || ((t) == NET_TYPE_VMNET_PUB))
+#    define NET_TYPE_IS_VMNET(t) (((t) == NET_TYPE_VMNET_NAT) || \
+                                  ((t) == NET_TYPE_VMNET_HOST) || \
+                                  ((t) == NET_TYPE_VMNET_BRIDGE) || \
+                                  ((t) == NET_TYPE_VMNET_PUB))
 #else
 #    define NET_TYPE_IS_VMNET(t) (0)
 #endif
+
+/* Local variables. */
 #ifdef ENABLE_NETWORK_LOG
 int             network_do_log = ENABLE_NETWORK_LOG;
 static FILE    *network_dump   = NULL;
@@ -259,7 +283,7 @@ network_init(void)
         network_devmap.has_pcap = 1;
         network_ndev += i;
     }
-    
+
 #ifdef __APPLE__
     i = net_vmnet_prepare(&network_devs[network_ndev]);
     if (i > 0) {
@@ -267,6 +291,7 @@ network_init(void)
         network_ndev += i;
     }
 #endif
+    
 #ifdef HAS_VDE
     // Try to load the VDE plug library
     if (!net_vde_prepare())
@@ -500,14 +525,14 @@ network_attach(void *card_drv, uint8_t *mac, NETRXCB rx, NETSETLINKSTATE set_lin
     card->byte_period     = NET_PERIOD_10M;
 
     char net_drv_error[NET_DRV_ERRBUF_SIZE];
-    wchar_t tempmsg[NET_DRV_ERRBUF_SIZE * 2];
+    char tempmsg[NET_DRV_ERRBUF_SIZE * 2];
 
     for (int i = 0; i < NET_QUEUE_COUNT; i++) {
         network_queue_init(&card->queues[i]);
     }
 
-    if ((!strcmp(network_card_get_internal_name(net_cards_conf[net_card_current].device_num), "modem") ||
-         !strcmp(network_card_get_internal_name(net_cards_conf[net_card_current].device_num), "plip")) && (net_type >= NET_TYPE_PCAP)) {
+    const char *nic_name = network_card_get_internal_name(net_cards_conf[net_card_current].device_num);
+    if ((!strcmp(nic_name, "modem") || !strcmp(nic_name, "plip")) && (net_type >= NET_TYPE_PCAP)) {
         /* Force SLiRP here. Modem and PLIP only operate on non-Ethernet frames. */
         net_type = NET_TYPE_SLIRP;
     }
@@ -521,30 +546,25 @@ network_attach(void *card_drv, uint8_t *mac, NETRXCB rx, NETSETLINKSTATE set_lin
         case NET_TYPE_PCAP:
             card->host_drv      = net_pcap_drv;
             card->host_drv.priv = card->host_drv.init(card, mac, net_cards_conf[net_card_current].host_dev_name, net_drv_error);
-	    break;
-
+            break;
 #ifdef __APPLE__
         case NET_TYPE_VMNET_NAT:
             card->host_drv      = net_vmnet_drv;
-            card->host_drv.priv = card->host_drv.init(card, mac, "shared", net_drv_error);
+            card->host_drv.priv = card->host_drv.init(card, mac, "vmnet-shared", net_drv_error);
             break;
-
         case NET_TYPE_VMNET_HOST:
             card->host_drv      = net_vmnet_drv;
-            card->host_drv.priv = card->host_drv.init(card, mac, "host", net_drv_error);
+            card->host_drv.priv = card->host_drv.init(card, mac, "vmnet-host", net_drv_error);
             break;
-
         case NET_TYPE_VMNET_BRIDGE:
             card->host_drv      = net_vmnet_drv;
-            card->host_drv.priv = card->host_drv.init(card, mac, "bridged", net_drv_error);
+            card->host_drv.priv = card->host_drv.init(card, mac, "vmnet-bridged", net_drv_error);
             break;
-
         case NET_TYPE_VMNET_PUB:
             card->host_drv      = net_vmnet_drv;
-            card->host_drv.priv = card->host_drv.init(card, mac, "published", net_drv_error);
+            card->host_drv.priv = card->host_drv.init(card, mac, "vmnet-published", net_drv_error);
             break;
 #endif
-
 #ifdef HAS_VDE
         case NET_TYPE_VDE:
             card->host_drv      = net_vde_drv;
@@ -574,7 +594,7 @@ network_attach(void *card_drv, uint8_t *mac, NETRXCB rx, NETSETLINKSTATE set_lin
 
         if(net_cards_conf[net_card_current].net_type != NET_TYPE_NONE) {
             // We're here because of a failure
-            swprintf(tempmsg, sizeof_w(tempmsg), L"%ls:\n\n%s\n\n%ls", plat_get_string(STRING_NET_ERROR), net_drv_error, plat_get_string(STRING_NET_ERROR_DESC));
+            snprintf(tempmsg, sizeof(tempmsg), plat_get_string(STRING_NET_ERROR), net_drv_error);
             ui_msgbox(MBX_ERROR, tempmsg);
             net_cards_conf[net_card_current].net_type = NET_TYPE_NONE;
         }
@@ -812,8 +832,7 @@ network_dev_available(int id)
         available = 0;
 
 #ifdef __APPLE__
-    if (NET_TYPE_IS_VMNET(net_cards_conf[id].net_type) &&
-        !network_devmap.has_vmnet)
+    if (NET_TYPE_IS_VMNET(net_cards_conf[id].net_type) && !network_devmap.has_vmnet)
         available = 0;
 #endif
 

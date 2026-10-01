@@ -22,10 +22,10 @@
 #    include <netinet/in.h>
 #endif
 
+#include <QAbstractSocket>
+#include <QHostAddress>
 #include <QMessageBox>
 #include <QSignalBlocker>
-#include <QHostAddress>
-#include <QAbstractSocket>
 
 extern "C" {
 #include <86box/86box.h>
@@ -37,6 +37,8 @@ extern "C" {
 }
 
 #include "qt_models_common.hpp"
+
+#include <vector>
 #include "qt_deviceconfig.hpp"
 
 #include "qt_defs.hpp"
@@ -50,28 +52,14 @@ extern "C" {
 static inline bool
 is_vmnet_type(int net_type)
 {
-    return (net_type == NET_TYPE_VMNET_NAT) ||
-           (net_type == NET_TYPE_VMNET_HOST) ||
-           (net_type == NET_TYPE_VMNET_BRIDGE) ||
-           (net_type == NET_TYPE_VMNET_PUB);
+    return (net_type == NET_TYPE_VMNET_NAT) || (net_type == NET_TYPE_VMNET_HOST) ||
+           (net_type == NET_TYPE_VMNET_BRIDGE) || (net_type == NET_TYPE_VMNET_PUB);
 }
 
 static inline bool
 vmnet_type_uses_interface(int net_type)
 {
-    return (net_type == NET_TYPE_VMNET_BRIDGE) ||
-           (net_type == NET_TYPE_VMNET_PUB);
-}
-
-static inline bool
-is_legacy_vmnet_host_device_name(const char *host_dev_name)
-{
-    return !strcmp(host_dev_name, "vmnet-shared") ||
-           !strcmp(host_dev_name, "vmnet-host") ||
-           !strcmp(host_dev_name, "vmnet-bridged") ||
-           !strcmp(host_dev_name, "vmnet-published") ||
-           !strcmp(host_dev_name, "vmnet-bridge") ||
-           !strcmp(host_dev_name, "vmnet-pub");
+    return (net_type == NET_TYPE_VMNET_BRIDGE) || (net_type == NET_TYPE_VMNET_PUB);
 }
 
 static bool
@@ -81,27 +69,18 @@ vmnet_host_interface_is_valid(const char *ifname)
         return false;
 
     struct ifaddrs *ifaddr = nullptr;
-    bool            valid  = false;
-
+    bool valid = false;
     if (getifaddrs(&ifaddr) != 0)
         return false;
 
     for (struct ifaddrs *ifa = ifaddr; ifa != nullptr; ifa = ifa->ifa_next) {
-        if ((ifa->ifa_name == nullptr) || (ifa->ifa_addr == nullptr))
+        if ((ifa->ifa_name == nullptr) || (ifa->ifa_addr == nullptr) || strcmp(ifa->ifa_name, ifname) != 0)
             continue;
-        if (strcmp(ifa->ifa_name, ifname) != 0)
+        if (ifa->ifa_addr->sa_family != AF_INET || (ifa->ifa_flags & IFF_UP) == 0 || (ifa->ifa_flags & IFF_LOOPBACK))
             continue;
-        if (ifa->ifa_addr->sa_family != AF_INET)
-            continue;
-        if ((ifa->ifa_flags & IFF_UP) == 0)
-            continue;
-        if (ifa->ifa_flags & IFF_LOOPBACK)
-            continue;
-
         valid = true;
         break;
     }
-
     freeifaddrs(ifaddr);
     return valid;
 }
@@ -143,19 +122,22 @@ SettingsNetwork::enableElements(Ui::SettingsNetwork *ui)
         auto *hostname_label = findChild<QLabel *>(QString("labelHostname%1").arg(i + 1));
         auto *hostname_value = findChild<QLineEdit *>(QString("hostnameSwitch%1").arg(i + 1));
 
-        bridge_line->setEnabled((net_type_cbox->currentData().toInt() == NET_TYPE_TAP)
+        bridge_line->setEnabled(net_type_cbox->currentData().toInt() == NET_TYPE_TAP
 #ifdef __APPLE__
-                                || (net_type_cbox->currentData().toInt() == NET_TYPE_VMNET_NAT)
+                                || net_type_cbox->currentData().toInt() == NET_TYPE_VMNET_NAT
 #endif
         );
         int current_net_type = net_type_cbox->currentData().toInt();
         intf_cbox->setEnabled(current_net_type == NET_TYPE_PCAP
 #ifdef __APPLE__
-                              || current_net_type == NET_TYPE_VMNET_BRIDGE
-                              || current_net_type == NET_TYPE_VMNET_PUB
+                              || current_net_type == NET_TYPE_VMNET_BRIDGE || current_net_type == NET_TYPE_VMNET_PUB
 #endif
         );
-        conf_btn->setEnabled(network_card_has_config(nic_cbox->currentData().toInt()));
+        auto nic = nic_cbox->currentData().toInt();
+        if (nic == NET_INTERNAL)
+            conf_btn->setEnabled(device_has_config(machine_get_net_device(machineId)));
+        else
+            conf_btn->setEnabled(network_card_has_config(nic_cbox->currentData().toInt()));
         // net_type_conf_btn->setEnabled(network_type_has_config(netType));
 
         // NEW STUFF
@@ -210,7 +192,6 @@ SettingsNetwork::enableElements(Ui::SettingsNetwork *ui)
 
                     intf_cbox->setVisible(true);
                     intf_label->setVisible(true);
-                    intf_label->setText(tr("Interface"));
                     break;
 
 #ifdef __APPLE__
@@ -218,21 +199,17 @@ SettingsNetwork::enableElements(Ui::SettingsNetwork *ui)
                 case NET_TYPE_VMNET_PUB:
                     option_list_label->setVisible(true);
                     option_list_line->setVisible(true);
-
                     intf_cbox->setVisible(true);
+                    intf_label->setText("Host interface");
                     intf_label->setVisible(true);
-                    intf_label->setText(tr("Host interface"));
                     break;
-
                 case NET_TYPE_VMNET_NAT:
                     option_list_label->setVisible(true);
                     option_list_line->setVisible(true);
-
+                    bridge_label->setText("Guest IPv4");
                     bridge_label->setVisible(true);
                     bridge_line->setVisible(true);
-                    bridge_label->setText(tr("Guest IPv4"));
                     break;
-
                 case NET_TYPE_VMNET_HOST:
                     break;
 #endif
@@ -284,44 +261,6 @@ SettingsNetwork::enableElements(Ui::SettingsNetwork *ui)
     }
 }
 
-static void
-populateInterfaceCombo(SettingsNetwork *self, int slot, int net_type, const QString &currentDevice)
-{
-    auto *cbox = self->findChild<QComboBox *>(QString("comboBoxIntf%1").arg(slot + 1));
-    if (cbox == nullptr)
-        return;
-
-    QSignalBlocker blocker(cbox);
-
-    auto *model       = cbox->model();
-    int   removeRows  = model->rowCount();
-    int   selectedRow = 0;
-
-    for (int c = 0; c < network_ndev; c++) {
-#ifdef __APPLE__
-        if (vmnet_type_uses_interface(net_type) && !vmnet_host_interface_is_valid(network_devs[c].device))
-            continue;
-#endif
-        int row = Models::AddEntry(model, QObject::tr(network_devs[c].description), c);
-        if (QString(network_devs[c].device) == currentDevice)
-            selectedRow = row - removeRows;
-    }
-
-    model->removeRows(0, removeRows);
-
-    if (model->rowCount() <= 0) {
-        cbox->setCurrentIndex(-1);
-        return;
-    }
-
-    if (selectedRow < 0)
-        selectedRow = 0;
-    if (selectedRow >= model->rowCount())
-        selectedRow = 0;
-
-    cbox->setCurrentIndex(selectedRow);
-}
-
 SettingsNetwork::SettingsNetwork(QWidget *parent)
     : QWidget(parent)
     , ui(new Ui::SettingsNetwork)
@@ -356,6 +295,14 @@ SettingsNetwork::~SettingsNetwork()
 }
 
 int
+SettingsNetwork::netCard(int i) const
+{
+    const QComboBox *cbox = findChild<QComboBox *>(QString("comboBoxNIC%1").arg(i + 1));
+
+    return cbox ? cbox->currentData().toInt() : 0;
+}
+
+int
 SettingsNetwork::changed()
 {
     int has_changed = 0;
@@ -371,8 +318,7 @@ SettingsNetwork::changed()
         has_changed                 |= (net_cards_conf[i].device_num != cbox->currentData().toInt());
         has_changed                 |= net_card_cfg_changed[i];
         cbox                         = findChild<QComboBox *>(QString("comboBoxNet%1").arg(i + 1));
-        int current_net_type        = cbox->currentData().toInt();
-        has_changed                 |= (net_cards_conf[i].net_type != current_net_type);
+        has_changed                 |= (net_cards_conf[i].net_type != cbox->currentData().toInt());
         cbox                         = findChild<QComboBox *>(QString("comboBoxIntf%1").arg(i + 1));
         auto *hostname_value         = findChild<QLineEdit *>(QString("hostnameSwitch%1").arg(i + 1));
         auto *promisc_value          = findChild<QCheckBox *>(QString("boxPromisc%1").arg(i + 1));
@@ -380,24 +326,17 @@ SettingsNetwork::changed()
         char  temp_host_dev_name[128];
         char  temp_secret[256];
         char  temp_nrs_hostname[128];
+#ifdef __APPLE__
         char  temp_vmnet_guest_ip[16];
+#endif
         memset(temp_host_dev_name, '\0', sizeof(temp_host_dev_name));
         memcpy(temp_secret, net_cards_conf[i].secret, 256);
         memcpy(temp_nrs_hostname, net_cards_conf[i].nrs_hostname, 128);
-        memcpy(temp_vmnet_guest_ip, net_cards_conf[i].vmnet_guest_ip, 16);
-        if (current_net_type == NET_TYPE_PCAP)
-            strncpy(temp_host_dev_name, network_devs[cbox->currentData().toInt()].device, sizeof(temp_host_dev_name) - 1);
 #ifdef __APPLE__
-        else if (vmnet_type_uses_interface(current_net_type))
-            strncpy(temp_host_dev_name, network_devs[cbox->currentData().toInt()].device, sizeof(temp_host_dev_name) - 1);
-        else if (is_vmnet_type(current_net_type))
-            strncpy(temp_host_dev_name, "none", sizeof(temp_host_dev_name) - 1);
-
-        if (current_net_type == NET_TYPE_VMNET_NAT) {
-            memset(temp_vmnet_guest_ip, '\0', sizeof(temp_vmnet_guest_ip));
-            strncpy(temp_vmnet_guest_ip, bridge_line->text().toUtf8().constData(), sizeof(temp_vmnet_guest_ip) - 1);
-        }
+        memcpy(temp_vmnet_guest_ip, net_cards_conf[i].vmnet_guest_ip, sizeof(temp_vmnet_guest_ip));
 #endif
+        if (net_cards_conf[i].net_type == NET_TYPE_PCAP)
+            strncpy(temp_host_dev_name, network_devs[cbox->currentData().toInt()].device, sizeof(temp_host_dev_name) - 1);
 #ifdef HAS_VDE
         else if (net_cards_conf[i].net_type == NET_TYPE_VDE)
             strncpy(temp_host_dev_name, socket_line->text().toUtf8().constData(), sizeof(temp_host_dev_name) - 1);
@@ -405,6 +344,16 @@ SettingsNetwork::changed()
 #if defined(__unix__) || defined(__APPLE__)
         else if (net_cards_conf[i].net_type == NET_TYPE_TAP)
             strncpy(temp_host_dev_name, bridge_line->text().toUtf8().constData(), sizeof(temp_host_dev_name) - 1);
+#endif
+#ifdef __APPLE__
+        else if (vmnet_type_uses_interface(net_cards_conf[i].net_type))
+            strncpy(temp_host_dev_name, network_devs[cbox->currentData().toInt()].device, sizeof(temp_host_dev_name) - 1);
+        else if (is_vmnet_type(net_cards_conf[i].net_type))
+            strncpy(temp_host_dev_name, "none", sizeof(temp_host_dev_name) - 1);
+        if (net_cards_conf[i].net_type == NET_TYPE_VMNET_NAT) {
+            memset(temp_vmnet_guest_ip, '\0', sizeof(temp_vmnet_guest_ip));
+            strncpy(temp_vmnet_guest_ip, bridge_line->text().toUtf8().constData(), sizeof(temp_vmnet_guest_ip) - 1);
+        }
 #endif
         else if (net_cards_conf[i].net_type == NET_TYPE_NRSWITCH) {
             memset(temp_nrs_hostname, '\0', sizeof(temp_nrs_hostname));
@@ -419,10 +368,12 @@ SettingsNetwork::changed()
         if (temp_host_dev_name[0] == 0x00)
             strncpy(temp_host_dev_name, "none", 5);
         temp_host_dev_name[sizeof(temp_host_dev_name) - 1] = 0x00;
-        has_changed |= strcmp(temp_host_dev_name, net_cards_conf[i].host_dev_name);
+        has_changed |= strcmp(temp_host_dev_name, net_cards_conf[i].host_dev_name[0] ? net_cards_conf[i].host_dev_name : "none");
         has_changed |= strcmp(temp_secret,        net_cards_conf[i].secret);
         has_changed |= strcmp(temp_nrs_hostname,  net_cards_conf[i].nrs_hostname);
+#ifdef __APPLE__
         has_changed |= strcmp(temp_vmnet_guest_ip, net_cards_conf[i].vmnet_guest_ip);
+#endif
     }
 
     return has_changed ? (SETTINGS_CHANGED | SETTINGS_REQUIRE_HARD_RESET) : 0;
@@ -434,57 +385,10 @@ SettingsNetwork::restore()
 }
 
 void
-SettingsNetwork::save()
+SettingsNetwork::save(int soft)
 {
-#ifdef __APPLE__
-    for (int i = 0; i < NET_CARD_MAX; ++i) {
-        auto *net_type_cbox = findChild<QComboBox *>(QString("comboBoxNet%1").arg(i + 1));
-        int   current_net_type = net_type_cbox->currentData().toInt();
-
-        if (vmnet_type_uses_interface(current_net_type)) {
-            auto *intf_cbox = findChild<QComboBox *>(QString("comboBoxIntf%1").arg(i + 1));
-
-            if ((intf_cbox == nullptr) || (intf_cbox->currentIndex() < 0) ||
-                !intf_cbox->currentData().isValid()) {
-                QMessageBox::warning(this,
-                                     tr("Network Configuration Error"),
-                                     tr("Adapter %1 requires a host interface to be selected.").arg(i + 1));
-                return;
-            }
-
-            const int dev_idx = intf_cbox->currentData().toInt();
-            if ((dev_idx < 0) || (dev_idx >= network_ndev) ||
-                !vmnet_host_interface_is_valid(network_devs[dev_idx].device)) {
-                QMessageBox::warning(this,
-                                     tr("Network Configuration Error"),
-                                     tr("Adapter %1 must use a host interface with an active IPv4 address.").arg(i + 1));
-                return;
-            }
-        }
-    }
-#endif
-
-#ifdef __APPLE__
-    for (int i = 0; i < NET_CARD_MAX; ++i) {
-        auto *net_type_cbox = findChild<QComboBox *>(QString("comboBoxNet%1").arg(i + 1));
-        int   current_net_type = net_type_cbox->currentData().toInt();
-
-        if (current_net_type == NET_TYPE_VMNET_NAT) {
-            auto *guest_ip_line = findChild<QLineEdit *>(QString("bridgeTAPNIC%1").arg(i + 1));
-            const QString guest_ip_text = guest_ip_line ? guest_ip_line->text().trimmed() : QString();
-
-            if (!guest_ip_text.isEmpty()) {
-                QHostAddress addr;
-                if (!addr.setAddress(guest_ip_text) || (addr.protocol() != QAbstractSocket::IPv4Protocol)) {
-                    QMessageBox::warning(this,
-                                         tr("Network Configuration Error"),
-                                         tr("Adapter %1 has an invalid Guest IPv4 address.").arg(i + 1));
-                    return;
-                }
-            }
-        }
-    }
-#endif
+    if (soft)
+        return;
 
     for (int i = 0; i < NET_CARD_MAX; ++i) {
         auto *cbox = findChild<QComboBox *>(QString("comboBoxNIC%1").arg(i + 1));
@@ -497,26 +401,16 @@ SettingsNetwork::save()
         net_cards_conf[i].device_num = cbox->currentData().toInt();
         cbox                         = findChild<QComboBox *>(QString("comboBoxNet%1").arg(i + 1));
         net_cards_conf[i].net_type   = cbox->currentData().toInt();
-        int current_net_type         = net_cards_conf[i].net_type;
         cbox                         = findChild<QComboBox *>(QString("comboBoxIntf%1").arg(i + 1));
         auto *hostname_value         = findChild<QLineEdit *>(QString("hostnameSwitch%1").arg(i + 1));
         auto *promisc_value          = findChild<QCheckBox *>(QString("boxPromisc%1").arg(i + 1));
         auto *secret_value           = findChild<QLineEdit *>(QString("secretSwitch%1").arg(i + 1));
         memset(net_cards_conf[i].host_dev_name, '\0', sizeof(net_cards_conf[i].host_dev_name));
-        memset(net_cards_conf[i].vmnet_guest_ip, '\0', sizeof(net_cards_conf[i].vmnet_guest_ip));
-        if (current_net_type == NET_TYPE_PCAP)
-            strncpy(net_cards_conf[i].host_dev_name, network_devs[cbox->currentData().toInt()].device, sizeof(net_cards_conf[i].host_dev_name) - 1);
 #ifdef __APPLE__
-        else if (vmnet_type_uses_interface(current_net_type))
-            strncpy(net_cards_conf[i].host_dev_name, network_devs[cbox->currentData().toInt()].device, sizeof(net_cards_conf[i].host_dev_name) - 1);
-        else if (is_vmnet_type(current_net_type))
-            strncpy(net_cards_conf[i].host_dev_name, "none", sizeof(net_cards_conf[i].host_dev_name) - 1);
-
-        if (current_net_type == NET_TYPE_VMNET_NAT)
-            strncpy(net_cards_conf[i].vmnet_guest_ip,
-                    bridge_line->text().toUtf8().constData(),
-                    sizeof(net_cards_conf[i].vmnet_guest_ip) - 1);
+        memset(net_cards_conf[i].vmnet_guest_ip, '\0', sizeof(net_cards_conf[i].vmnet_guest_ip));
 #endif
+        if (net_cards_conf[i].net_type == NET_TYPE_PCAP)
+            strncpy(net_cards_conf[i].host_dev_name, network_devs[cbox->currentData().toInt()].device, sizeof(net_cards_conf[i].host_dev_name) - 1);
 #ifdef HAS_VDE
         else if (net_cards_conf[i].net_type == NET_TYPE_VDE)
             strncpy(net_cards_conf[i].host_dev_name, socket_line->text().toUtf8().constData(), sizeof(net_cards_conf[i].host_dev_name) - 1);
@@ -524,6 +418,14 @@ SettingsNetwork::save()
 #if defined(__unix__) || defined(__APPLE__)
         else if (net_cards_conf[i].net_type == NET_TYPE_TAP)
             strncpy(net_cards_conf[i].host_dev_name, bridge_line->text().toUtf8().constData(), sizeof(net_cards_conf[i].host_dev_name) - 1);
+#endif
+#ifdef __APPLE__
+        else if (vmnet_type_uses_interface(net_cards_conf[i].net_type))
+            strncpy(net_cards_conf[i].host_dev_name, network_devs[cbox->currentData().toInt()].device, sizeof(net_cards_conf[i].host_dev_name) - 1);
+        else if (is_vmnet_type(net_cards_conf[i].net_type))
+            strncpy(net_cards_conf[i].host_dev_name, "none", sizeof(net_cards_conf[i].host_dev_name) - 1);
+        if (net_cards_conf[i].net_type == NET_TYPE_VMNET_NAT)
+            strncpy(net_cards_conf[i].vmnet_guest_ip, bridge_line->text().toUtf8().constData(), sizeof(net_cards_conf[i].vmnet_guest_ip) - 1);
 #endif
         else if (net_cards_conf[i].net_type == NET_TYPE_NRSWITCH) {
             memset(net_cards_conf[i].nrs_hostname, '\0', sizeof(net_cards_conf[i].nrs_hostname));
@@ -556,7 +458,7 @@ SettingsNetwork::onCurrentMachineChanged(int machineId)
     QAbstractItemModel *models[NET_CARD_MAX]       = { 0 };
     int                 removeRows_[NET_CARD_MAX]  = { 0 };
     int                 selectedRows[NET_CARD_MAX] = { 0 };
-    int                 m_has_net                  = machine_has_flags(machineId, MACHINE_NIC);
+    int                 m_has_net                  = (!!machine_has_flags_64(machineId, MACHINE_NIC_PRI)) | ((!!machine_has_flags_64(machineId, MACHINE_NIC_SEC)) << 1);
 
     for (uint8_t i = 0; i < NET_CARD_MAX; ++i) {
         sc[i]->removeRows();
@@ -566,35 +468,29 @@ SettingsNetwork::onCurrentMachineChanged(int machineId)
         removeRows_[i] = models[i]->rowCount();
     }
 
-    c = 0;
-    while (true) {
-        QString name = DeviceConfig::DeviceName(network_card_getdevice(c),
-                                                network_card_get_internal_name(c), 1);
+    std::vector<Models::Batch> rows(models, models + NET_CARD_MAX);
+    for (const auto &card : Models::Devices(network_card_getdevice, network_card_get_internal_name, network_card_available, 1)) {
+        c = card.id;
+        if (card.available && device_is_valid(card.dev, machineId)) {
+            QString name = card.name;
 
-        if (name.isEmpty())
-            break;
-
-        if (network_card_available(c)) {
-            if (device_is_valid(network_card_getdevice(c), machineId)) {
-                for (uint8_t i = 0; i < NET_CARD_MAX; ++i) {
-                    if ((c != 1) || ((i == 0) && m_has_net)) {
-                        if (i == 0 && c == 1 && m_has_net && machine_get_net_device(machineId)) {
-                            name += QString(" (%1)").arg(DeviceConfig::DeviceName(machine_get_net_device(machineId), machine_get_net_device(machineId)->internal_name, 0));
-                        }
-                        int row = Models::AddEntry(models[i], name, c);
-                        sc[i]->addDevice(network_card_getdevice(c), name);
-
-                        if (c == net_cards_conf[i].device_num)
-                            selectedRows[i] = row - removeRows_[i];
+            for (uint8_t i = 0; i < NET_CARD_MAX; ++i) {
+                if ((c != 1) || (m_has_net & (1 << i))) {
+                    if (i == 0 && c == 1 && m_has_net && machine_get_net_device(machineId)) {
+                        name += QString(" (%1)").arg(DeviceConfig::DeviceName(machine_get_net_device(machineId), machine_get_net_device(machineId)->internal_name, 0));
                     }
+                    int row = rows[i].add(name, c);
+                    sc[i]->addDevice(card.dev, name);
+
+                    if (c == net_cards_conf[i].device_num)
+                        selectedRows[i] = row - removeRows_[i];
                 }
             }
         }
-
-        c++;
     }
 
     for (uint8_t i = 0; i < NET_CARD_MAX; ++i) {
+        rows[i].commit();
         models[i]->removeRows(0, removeRows_[i]);
         cbox_[i]->setEnabled(models[i]->rowCount() > 1);
         cbox_[i]->setCurrentIndex(-1);
@@ -603,34 +499,35 @@ SettingsNetwork::onCurrentMachineChanged(int machineId)
         auto cbox       = findChild<QComboBox *>(QString("comboBoxNet%1").arg(i + 1));
         auto model      = cbox->model();
         auto removeRows = model->rowCount();
-        Models::AddEntry(model, tr("Null Driver"), NET_TYPE_NONE);
-        Models::AddEntry(model, "SLiRP", NET_TYPE_SLIRP);
+        Models::Batch typeRows(model);
+        typeRows.add(tr("Null Driver"), NET_TYPE_NONE);
+        typeRows.add("SLiRP", NET_TYPE_SLIRP);
 
         if (network_ndev > 1)
-            Models::AddEntry(model, "PCap", NET_TYPE_PCAP);
-
-#ifdef __APPLE__
-        if (network_devmap.has_vmnet) {
-            Models::AddEntry(model, "vmnet Shared (NAT)", NET_TYPE_VMNET_NAT);
-            Models::AddEntry(model, "vmnet Host-Only", NET_TYPE_VMNET_HOST);
-            Models::AddEntry(model, "vmnet Bridged", NET_TYPE_VMNET_BRIDGE);
-            Models::AddEntry(model, "vmnet Published IP", NET_TYPE_VMNET_PUB);
-        }
-#endif
+            typeRows.add("PCap", NET_TYPE_PCAP);
 
 #ifdef HAS_VDE
         if (network_devmap.has_vde)
-            Models::AddEntry(model, "VDE", NET_TYPE_VDE);
+            typeRows.add("VDE", NET_TYPE_VDE);
 #endif
 
 #if defined(__unix__) || defined(__APPLE__)
-        Models::AddEntry(model, "TAP", NET_TYPE_TAP);
+        typeRows.add("TAP", NET_TYPE_TAP);
 #endif
 
-        Models::AddEntry(model, tr("Local Switch"), NET_TYPE_NLSWITCH);
+        typeRows.add(tr("Local Switch"), NET_TYPE_NLSWITCH);
 #ifdef ENABLE_NET_NRSWITCH
-        Models::AddEntry(model, tr("Remote Switch"), NET_TYPE_NRSWITCH);
+        typeRows.add(tr("Remote Switch"), NET_TYPE_NRSWITCH);
 #endif /* ENABLE_NET_NRSWITCH */
+#ifdef __APPLE__
+        if (network_devmap.has_vmnet) {
+            typeRows.add("vmnet Shared (NAT)", NET_TYPE_VMNET_NAT);
+            typeRows.add("vmnet Host-Only", NET_TYPE_VMNET_HOST);
+            typeRows.add("vmnet Bridged", NET_TYPE_VMNET_BRIDGE);
+            typeRows.add("vmnet Published IP", NET_TYPE_VMNET_PUB);
+        }
+#endif
+        typeRows.commit();
 
         model->removeRows(0, removeRows);
         cbox->setCurrentIndex(cbox->findData(net_cards_conf[i].net_type));
@@ -639,12 +536,25 @@ SettingsNetwork::onCurrentMachineChanged(int machineId)
 
         if (network_ndev > 0) {
             QString currentPcapDevice = net_cards_conf[i].host_dev_name;
+            cbox                      = findChild<QComboBox *>(QString("comboBoxIntf%1").arg(i + 1));
+            model                     = cbox->model();
+            removeRows                = model->rowCount();
+            Models::Batch intfRows(model);
+            for (int c = 0; c < network_ndev; c++) {
 #ifdef __APPLE__
-            if (is_vmnet_type(net_cards_conf[i].net_type) &&
-                is_legacy_vmnet_host_device_name(net_cards_conf[i].host_dev_name))
-                currentPcapDevice.clear();
+                if (vmnet_type_uses_interface(net_cards_conf[i].net_type) &&
+                    !vmnet_host_interface_is_valid(network_devs[c].device))
+                    continue;
 #endif
-            populateInterfaceCombo(this, i, net_cards_conf[i].net_type, currentPcapDevice);
+                intfRows.add(tr(network_devs[c].description), c);
+                scDevice[i]->addDevice(nullptr, tr(network_devs[c].description));
+                if (QString(network_devs[c].device) == currentPcapDevice) {
+                    selectedRow = c;
+                }
+            }
+            intfRows.commit();
+            model->removeRows(0, removeRows);
+            cbox->setCurrentIndex(selectedRow);
         }
 
         if (net_cards_conf[i].net_type == NET_TYPE_VDE) {
@@ -660,12 +570,11 @@ SettingsNetwork::onCurrentMachineChanged(int machineId)
             QString currentTapDevice = net_cards_conf[i].host_dev_name;
             auto    editline         = findChild<QLineEdit *>(QString("bridgeTAPNIC%1").arg(i + 1));
             editline->setText(currentTapDevice);
+#endif
 #ifdef __APPLE__
         } else if (net_cards_conf[i].net_type == NET_TYPE_VMNET_NAT) {
-            QString currentGuestIp = net_cards_conf[i].vmnet_guest_ip;
-            auto    editline       = findChild<QLineEdit *>(QString("bridgeTAPNIC%1").arg(i + 1));
-            editline->setText(currentGuestIp);
-#endif
+            auto *editline = findChild<QLineEdit *>(QString("bridgeTAPNIC%1").arg(i + 1));
+            editline->setText(net_cards_conf[i].vmnet_guest_ip);
 #endif
         } else if (net_cards_conf[i].net_type == NET_TYPE_NLSWITCH) {
             auto *promisc_value = findChild<QCheckBox *>(QString("boxPromisc%1").arg(i + 1));
@@ -687,20 +596,6 @@ SettingsNetwork::on_comboIndexChanged(int index)
     if (index < 0)
         return;
 
-    for (int i = 0; i < NET_CARD_MAX; ++i) {
-        auto *net_type_cbox = findChild<QComboBox *>(QString("comboBoxNet%1").arg(i + 1));
-        auto *intf_cbox     = findChild<QComboBox *>(QString("comboBoxIntf%1").arg(i + 1));
-
-        QString currentDevice;
-        if ((intf_cbox != nullptr) && intf_cbox->currentData().isValid()) {
-            int dev_idx = intf_cbox->currentData().toInt();
-            if ((dev_idx >= 0) && (dev_idx < network_ndev))
-                currentDevice = network_devs[dev_idx].device;
-        }
-
-        populateInterfaceCombo(this, i, net_type_cbox->currentData().toInt(), currentDevice);
-    }
-
     enableElements(ui);
 }
 
@@ -709,8 +604,13 @@ SettingsNetwork::on_pushButtonConf1_clicked()
 {
     int   netCard = ui->comboBoxNIC1->currentData().toInt();
     auto *device  = network_card_getdevice(netCard);
-    if (netCard == NET_INTERNAL)
+    if (netCard == NET_INTERNAL) {
         device = machine_get_net_device(machineId);
+        if (!machine_has_flags_64(machineId, MACHINE_NIC_SEC)) {
+            net_card_cfg_changed[0] = DeviceConfig::ConfigureDevice(device);
+            return;
+        }
+    }
     net_card_cfg_changed[0] = DeviceConfig::ConfigureDevice(device, 1);
 }
 
@@ -719,6 +619,8 @@ SettingsNetwork::on_pushButtonConf2_clicked()
 {
     int   netCard = ui->comboBoxNIC2->currentData().toInt();
     auto *device  = network_card_getdevice(netCard);
+    if (netCard == NET_INTERNAL)
+        device = machine_get_net_device(machineId);
     net_card_cfg_changed[1] = DeviceConfig::ConfigureDevice(device, 2);
 }
 
