@@ -1,0 +1,2434 @@
+diff --git a/src/config.c b/src/config.c
+index 7777a0f54..62799702f 100644
+--- a/src/config.c
++++ b/src/config.c
+@@ -107,6 +107,19 @@ static ini_t    config;
+ static ini_t    global;
+ static mutex_t *config_mutex = NULL;
+ 
++#ifdef __APPLE__
++static int
++config_is_legacy_vmnet_host_device_name(const char *host_dev_name)
++{
++    return !strcmp(host_dev_name, "vmnet-shared") ||
++           !strcmp(host_dev_name, "vmnet-host") ||
++           !strcmp(host_dev_name, "vmnet-bridged") ||
++           !strcmp(host_dev_name, "vmnet-published") ||
++           !strcmp(host_dev_name, "vmnet-bridge") ||
++           !strcmp(host_dev_name, "vmnet-pub");
++}
++#endif
++
+ #ifdef ENABLE_CONFIG_LOG
+ int config_do_log = ENABLE_CONFIG_LOG;
+ 
+@@ -1090,6 +1103,16 @@ load_network(void)
+                 nc->net_type = NET_TYPE_NLSWITCH;
+             else if (!strcmp(p, "nrswitch") || !strcmp(p, "6"))
+                 nc->net_type = NET_TYPE_NRSWITCH;
++#ifdef __APPLE__
++            else if (!strcmp(p, "vmnet") || !strcmp(p, "vmnet-shared") || !strcmp(p, "vmnet-nat") || !strcmp(p, "7"))
++                nc->net_type = NET_TYPE_VMNET_NAT;
++            else if (!strcmp(p, "vmnet-host") || !strcmp(p, "8"))
++                nc->net_type = NET_TYPE_VMNET_HOST;
++            else if (!strcmp(p, "vmnet-bridged") || !strcmp(p, "vmnet-bridge") || !strcmp(p, "9"))
++                nc->net_type = NET_TYPE_VMNET_BRIDGE;
++            else if (!strcmp(p, "vmnet-published") || !strcmp(p, "vmnet-pub") || !strcmp(p, "10"))
++                nc->net_type = NET_TYPE_VMNET_PUB;
++#endif
+             else
+                 nc->net_type = NET_TYPE_NONE;
+         } else
+@@ -1108,6 +1131,11 @@ load_network(void)
+                     strncpy(nc->host_dev_name, p, sizeof(nc->host_dev_name) - 1);
+             } else
+                 strncpy(nc->host_dev_name, p, sizeof(nc->host_dev_name) - 1);
++#ifdef __APPLE__
++            if ((nc->net_type == NET_TYPE_VMNET_BRIDGE || nc->net_type == NET_TYPE_VMNET_PUB) &&
++                config_is_legacy_vmnet_host_device_name(nc->host_dev_name))
++                strcpy(nc->host_dev_name, "none");
++#endif
+         } else
+             strcpy(nc->host_dev_name, "none");
+ 
+@@ -1142,6 +1170,16 @@ load_network(void)
+                 nc->net_type = NET_TYPE_NLSWITCH;
+             else if (!strcmp(p, "nrswitch") || !strcmp(p, "6"))
+                 nc->net_type = NET_TYPE_NRSWITCH;
++#ifdef __APPLE__
++            else if (!strcmp(p, "vmnet") || !strcmp(p, "vmnet-shared") || !strcmp(p, "vmnet-nat") || !strcmp(p, "7"))
++                nc->net_type = NET_TYPE_VMNET_NAT;
++            else if (!strcmp(p, "vmnet-host") || !strcmp(p, "8"))
++                nc->net_type = NET_TYPE_VMNET_HOST;
++            else if (!strcmp(p, "vmnet-bridged") || !strcmp(p, "vmnet-bridge") || !strcmp(p, "9"))
++                nc->net_type = NET_TYPE_VMNET_BRIDGE;
++            else if (!strcmp(p, "vmnet-published") || !strcmp(p, "vmnet-pub") || !strcmp(p, "10"))
++                nc->net_type = NET_TYPE_VMNET_PUB;
++#endif
+             else
+                 nc->net_type = NET_TYPE_NONE;
+         } else
+@@ -1160,6 +1198,11 @@ load_network(void)
+                     strncpy(nc->host_dev_name, p, sizeof(nc->host_dev_name) - 1);
+             } else
+                 strncpy(nc->host_dev_name, p, sizeof(nc->host_dev_name) - 1);
++#ifdef __APPLE__
++            if ((nc->net_type == NET_TYPE_VMNET_BRIDGE || nc->net_type == NET_TYPE_VMNET_PUB) &&
++                config_is_legacy_vmnet_host_device_name(nc->host_dev_name))
++                strcpy(nc->host_dev_name, "none");
++#endif
+         } else
+             strcpy(nc->host_dev_name, "none");
+ 
+@@ -1182,6 +1225,13 @@ load_network(void)
+             nc->slirp_net[0] = '\0';
+         }
+ 
++#ifdef __APPLE__
++        sprintf(temp, "net_%02i_vmnet_guest_ip", c + 1);
++        p = ini_section_get_string(cat, temp, NULL);
++        strncpy(nc->vmnet_guest_ip, p ? p : "", sizeof(nc->vmnet_guest_ip) - 1);
++        nc->vmnet_guest_ip[sizeof(nc->vmnet_guest_ip) - 1] = '\0';
++#endif
++
+         sprintf(temp, "net_%02i_secret", c + 1);
+         p = ini_section_get_string(cat, temp, NULL);
+         strncpy(nc->secret, p ? p : "", sizeof(nc->secret) - 1);
+@@ -3762,6 +3812,20 @@ save_network(void)
+             case NET_TYPE_NRSWITCH:
+                 ini_section_set_string(cat, temp, "nrswitch");
+                 break;
++#ifdef __APPLE__
++            case NET_TYPE_VMNET_NAT:
++                ini_section_set_string(cat, temp, "vmnet-shared");
++                break;
++            case NET_TYPE_VMNET_HOST:
++                ini_section_set_string(cat, temp, "vmnet-host");
++                break;
++            case NET_TYPE_VMNET_BRIDGE:
++                ini_section_set_string(cat, temp, "vmnet-bridged");
++                break;
++            case NET_TYPE_VMNET_PUB:
++                ini_section_set_string(cat, temp, "vmnet-published");
++                break;
++#endif
+             default:
+                 break;
+         }
+@@ -3791,6 +3855,14 @@ save_network(void)
+             ini_section_delete_var(cat, temp);
+         }
+ 
++#ifdef __APPLE__
++        sprintf(temp, "net_%02i_vmnet_guest_ip", c + 1);
++        if (nc->vmnet_guest_ip[0] == '\0')
++            ini_section_delete_var(cat, temp);
++        else
++            ini_section_set_string(cat, temp, nc->vmnet_guest_ip);
++#endif
++
+         sprintf(temp, "net_%02i_secret", c + 1);
+         if (nc->secret[0] == '\0')
+             ini_section_delete_var(cat, temp);
+diff --git a/src/include/86box/network.h b/src/include/86box/network.h
+index 1994115a4..3b643f668 100644
+--- a/src/include/86box/network.h
++++ b/src/include/86box/network.h
+@@ -52,6 +52,12 @@
+ #define NET_TYPE_TAP      4 /* use a linux TAP device */
+ #define NET_TYPE_NLSWITCH 5 /* use the local switch provider */
+ #define NET_TYPE_NRSWITCH 6 /* use the remote switch provider */
++#ifdef __APPLE__
++#define NET_TYPE_VMNET_NAT      7 /* Apple vmnet shared/NAT */
++#define NET_TYPE_VMNET_HOST     8 /* Apple vmnet host-only */
++#define NET_TYPE_VMNET_BRIDGE   9 /* Apple vmnet bridged */
++#define NET_TYPE_VMNET_PUB      10 /* Apple vmnet published */
++#endif
+ 
+ #define NET_MAX_FRAME  1518
+ /* Queue size must be a power of 2 */
+@@ -98,6 +104,9 @@ typedef struct netcard_conf_t {
+     char     secret[256];
+     uint8_t  promisc_mode;
+     char     slirp_net[16];
++#ifdef __APPLE__
++    char     vmnet_guest_ip[16];
++#endif
+     char     nrs_hostname[128];
+ } netcard_conf_t;
+ 
+@@ -134,6 +143,9 @@ extern const netdrv_t net_vde_drv;
+ extern const netdrv_t net_tap_drv;
+ extern const netdrv_t net_null_drv;
+ extern const netdrv_t net_switch_drv;
++#ifdef __APPLE__
++extern const netdrv_t net_vmnet_drv;
++#endif
+ 
+ struct _netcard_t {
+     const device_t *device;
+@@ -163,10 +175,17 @@ typedef struct {
+     int has_pcap;
+     int has_vde;
+     int has_tap;
++#ifdef __APPLE__
++    int has_vmnet;
++#endif
+ } network_devmap_t;
+ 
+ 
++#ifdef __APPLE__
++#define HAS_NOSLIRP_NET(x)  (x.has_pcap || x.has_vde || x.has_tap || x.has_vmnet)
++#else
+ #define HAS_NOSLIRP_NET(x)  (x.has_pcap || x.has_vde || x.has_tap)
++#endif
+ 
+ #ifdef __cplusplus
+ extern "C" {
+@@ -191,6 +210,9 @@ extern void       network_tx(netcard_t *card, uint8_t *, int);
+ 
+ extern int net_pcap_prepare(netdev_t *);
+ extern int net_vde_prepare(void);
++#ifdef __APPLE__
++extern int net_vmnet_prepare(netdev_t *list);
++#endif
+ 
+ 
+ extern void            network_connect(int id, int connect);
+diff --git a/src/network/CMakeLists.txt b/src/network/CMakeLists.txt
+index fff50d184..76dbfe62b 100644
+--- a/src/network/CMakeLists.txt
++++ b/src/network/CMakeLists.txt
+@@ -41,6 +41,10 @@ list(APPEND net_sources
+     utils/getline.c
+ )
+ 
++if(APPLE)
++    list(APPEND net_sources net_vmnet.c)
++endif()
++
+ find_package(PkgConfig REQUIRED)
+ pkg_check_modules(SLIRP REQUIRED IMPORTED_TARGET slirp)
+ target_link_libraries(86Box PkgConfig::SLIRP)
+@@ -89,3 +93,7 @@ if (UNIX AND NOT APPLE) # Support for TAP on Linux and BSD, supposedly.
+ endif()
+ 
+ add_library(net OBJECT ${net_sources})
++
++if(APPLE)
++    target_link_libraries(86Box "-framework vmnet")
++endif()
+diff --git a/src/network/network.c b/src/network/network.c
+index 75da5d063..e0a430aad 100644
+--- a/src/network/network.c
++++ b/src/network/network.c
+@@ -68,6 +68,11 @@
+ #include <86box/net_wd8003.h>
+ #include <86box/net_smc_epic100.h>
+ 
++#ifdef __APPLE__
++extern const netdrv_t net_vmnet_drv;
++extern int net_vmnet_prepare(netdev_t *list);
++#endif
++
+ #ifdef _WIN32
+ #    define WIN32_LEAN_AND_MEAN
+ #    include <windows.h>
+@@ -168,6 +173,15 @@ network_devmap_t network_devmap = {0};
+ int  network_ndev;
+ netdev_t network_devs[NET_HOST_INTF_MAX];
+ 
++#ifdef __APPLE__
++#    define NET_TYPE_IS_VMNET(t) (((t) == NET_TYPE_VMNET_NAT) || \
++                                  ((t) == NET_TYPE_VMNET_HOST) || \
++                                  ((t) == NET_TYPE_VMNET_BRIDGE) || \
++                                  ((t) == NET_TYPE_VMNET_PUB))
++#else
++#    define NET_TYPE_IS_VMNET(t) (0)
++#endif
++
+ /* Local variables. */
+ #ifdef ENABLE_NETWORK_LOG
+ int             network_do_log = ENABLE_NETWORK_LOG;
+@@ -269,6 +283,14 @@ network_init(void)
+         network_devmap.has_pcap = 1;
+         network_ndev += i;
+     }
++
++#ifdef __APPLE__
++    i = net_vmnet_prepare(&network_devs[network_ndev]);
++    if (i > 0) {
++        network_devmap.has_vmnet = 1;
++        network_ndev += i;
++    }
++#endif
+     
+ #ifdef HAS_VDE
+     // Try to load the VDE plug library
+@@ -525,6 +547,24 @@ network_attach(void *card_drv, uint8_t *mac, NETRXCB rx, NETSETLINKSTATE set_lin
+             card->host_drv      = net_pcap_drv;
+             card->host_drv.priv = card->host_drv.init(card, mac, net_cards_conf[net_card_current].host_dev_name, net_drv_error);
+             break;
++#ifdef __APPLE__
++        case NET_TYPE_VMNET_NAT:
++            card->host_drv      = net_vmnet_drv;
++            card->host_drv.priv = card->host_drv.init(card, mac, "vmnet-shared", net_drv_error);
++            break;
++        case NET_TYPE_VMNET_HOST:
++            card->host_drv      = net_vmnet_drv;
++            card->host_drv.priv = card->host_drv.init(card, mac, "vmnet-host", net_drv_error);
++            break;
++        case NET_TYPE_VMNET_BRIDGE:
++            card->host_drv      = net_vmnet_drv;
++            card->host_drv.priv = card->host_drv.init(card, mac, "vmnet-bridged", net_drv_error);
++            break;
++        case NET_TYPE_VMNET_PUB:
++            card->host_drv      = net_vmnet_drv;
++            card->host_drv.priv = card->host_drv.init(card, mac, "vmnet-published", net_drv_error);
++            break;
++#endif
+ #ifdef HAS_VDE
+         case NET_TYPE_VDE:
+             card->host_drv      = net_vde_drv;
+@@ -791,6 +831,11 @@ network_dev_available(int id)
+         (network_dev_to_id(net_cards_conf[id].host_dev_name) <= 0))
+         available = 0;
+ 
++#ifdef __APPLE__
++    if (NET_TYPE_IS_VMNET(net_cards_conf[id].net_type) && !network_devmap.has_vmnet)
++        available = 0;
++#endif
++
+     // TODO: Handle VDE device
+ 
+     return available;
+diff --git a/src/qt/qt_mediamenu.cpp b/src/qt/qt_mediamenu.cpp
+index bae2d0f36..9e5eb7809 100644
+--- a/src/qt/qt_mediamenu.cpp
++++ b/src/qt/qt_mediamenu.cpp
+@@ -1506,6 +1506,20 @@ MediaMenu::nicUpdateMenu(int i)
+         case NET_TYPE_NRSWITCH:
+             netType = tr("Remote Switch");
+             break;
++#ifdef __APPLE__
++        case NET_TYPE_VMNET_NAT:
++            netType = "vmnet Shared (NAT)";
++            break;
++        case NET_TYPE_VMNET_HOST:
++            netType = "vmnet Host-Only";
++            break;
++        case NET_TYPE_VMNET_BRIDGE:
++            netType = "vmnet Bridged";
++            break;
++        case NET_TYPE_VMNET_PUB:
++            netType = "vmnet Published IP";
++            break;
++#endif
+     }
+ 
+     QString devName = DeviceConfig::DeviceName(network_card_getdevice(net_cards_conf[i].device_num), network_card_get_internal_name(net_cards_conf[i].device_num), 1);
+diff --git a/src/qt/qt_settingsnetwork.cpp b/src/qt/qt_settingsnetwork.cpp
+index a9a530805..5a8b5f708 100644
+--- a/src/qt/qt_settingsnetwork.cpp
++++ b/src/qt/qt_settingsnetwork.cpp
+@@ -16,6 +16,17 @@
+ #include <cstdint>
+ #include <cstdio>
+ 
++#ifdef __APPLE__
++#    include <ifaddrs.h>
++#    include <net/if.h>
++#    include <netinet/in.h>
++#endif
++
++#include <QAbstractSocket>
++#include <QHostAddress>
++#include <QMessageBox>
++#include <QSignalBlocker>
++
+ extern "C" {
+ #include <86box/86box.h>
+ #include <86box/device.h>
+@@ -37,6 +48,44 @@ extern "C" {
+ #include "qt_settingsnetwork.hpp"
+ #include "ui_qt_settingsnetwork.h"
+ 
++#ifdef __APPLE__
++static inline bool
++is_vmnet_type(int net_type)
++{
++    return (net_type == NET_TYPE_VMNET_NAT) || (net_type == NET_TYPE_VMNET_HOST) ||
++           (net_type == NET_TYPE_VMNET_BRIDGE) || (net_type == NET_TYPE_VMNET_PUB);
++}
++
++static inline bool
++vmnet_type_uses_interface(int net_type)
++{
++    return (net_type == NET_TYPE_VMNET_BRIDGE) || (net_type == NET_TYPE_VMNET_PUB);
++}
++
++static bool
++vmnet_host_interface_is_valid(const char *ifname)
++{
++    if ((ifname == nullptr) || (ifname[0] == '\0'))
++        return false;
++
++    struct ifaddrs *ifaddr = nullptr;
++    bool valid = false;
++    if (getifaddrs(&ifaddr) != 0)
++        return false;
++
++    for (struct ifaddrs *ifa = ifaddr; ifa != nullptr; ifa = ifa->ifa_next) {
++        if ((ifa->ifa_name == nullptr) || (ifa->ifa_addr == nullptr) || strcmp(ifa->ifa_name, ifname) != 0)
++            continue;
++        if (ifa->ifa_addr->sa_family != AF_INET || (ifa->ifa_flags & IFF_UP) == 0 || (ifa->ifa_flags & IFF_LOOPBACK))
++            continue;
++        valid = true;
++        break;
++    }
++    freeifaddrs(ifaddr);
++    return valid;
++}
++#endif
++
+ void
+ SettingsNetwork::enableElements(Ui::SettingsNetwork *ui)
+ {
+@@ -73,8 +122,17 @@ SettingsNetwork::enableElements(Ui::SettingsNetwork *ui)
+         auto *hostname_label = findChild<QLabel *>(QString("labelHostname%1").arg(i + 1));
+         auto *hostname_value = findChild<QLineEdit *>(QString("hostnameSwitch%1").arg(i + 1));
+ 
+-        bridge_line->setEnabled(net_type_cbox->currentData().toInt() == NET_TYPE_TAP);
+-        intf_cbox->setEnabled(net_type_cbox->currentData().toInt() == NET_TYPE_PCAP);
++        bridge_line->setEnabled(net_type_cbox->currentData().toInt() == NET_TYPE_TAP
++#ifdef __APPLE__
++                                || net_type_cbox->currentData().toInt() == NET_TYPE_VMNET_NAT
++#endif
++        );
++        int current_net_type = net_type_cbox->currentData().toInt();
++        intf_cbox->setEnabled(current_net_type == NET_TYPE_PCAP
++#ifdef __APPLE__
++                              || current_net_type == NET_TYPE_VMNET_BRIDGE || current_net_type == NET_TYPE_VMNET_PUB
++#endif
++        );
+         auto nic = nic_cbox->currentData().toInt();
+         if (nic == NET_INTERNAL)
+             conf_btn->setEnabled(device_has_config(machine_get_net_device(machineId)));
+@@ -136,6 +194,26 @@ SettingsNetwork::enableElements(Ui::SettingsNetwork *ui)
+                     intf_label->setVisible(true);
+                     break;
+ 
++#ifdef __APPLE__
++                case NET_TYPE_VMNET_BRIDGE:
++                case NET_TYPE_VMNET_PUB:
++                    option_list_label->setVisible(true);
++                    option_list_line->setVisible(true);
++                    intf_cbox->setVisible(true);
++                    intf_label->setText("Host interface");
++                    intf_label->setVisible(true);
++                    break;
++                case NET_TYPE_VMNET_NAT:
++                    option_list_label->setVisible(true);
++                    option_list_line->setVisible(true);
++                    bridge_label->setText("Guest IPv4");
++                    bridge_label->setVisible(true);
++                    bridge_line->setVisible(true);
++                    break;
++                case NET_TYPE_VMNET_HOST:
++                    break;
++#endif
++
+ #if defined(__unix__) || defined(__APPLE__)
+                 case NET_TYPE_TAP:
+                     // option_list_label->setText("TAP Options");
+@@ -248,9 +326,15 @@ SettingsNetwork::changed()
+         char  temp_host_dev_name[128];
+         char  temp_secret[256];
+         char  temp_nrs_hostname[128];
++#ifdef __APPLE__
++        char  temp_vmnet_guest_ip[16];
++#endif
+         memset(temp_host_dev_name, '\0', sizeof(temp_host_dev_name));
+         memcpy(temp_secret, net_cards_conf[i].secret, 256);
+         memcpy(temp_nrs_hostname, net_cards_conf[i].nrs_hostname, 128);
++#ifdef __APPLE__
++        memcpy(temp_vmnet_guest_ip, net_cards_conf[i].vmnet_guest_ip, sizeof(temp_vmnet_guest_ip));
++#endif
+         if (net_cards_conf[i].net_type == NET_TYPE_PCAP)
+             strncpy(temp_host_dev_name, network_devs[cbox->currentData().toInt()].device, sizeof(temp_host_dev_name) - 1);
+ #ifdef HAS_VDE
+@@ -260,6 +344,16 @@ SettingsNetwork::changed()
+ #if defined(__unix__) || defined(__APPLE__)
+         else if (net_cards_conf[i].net_type == NET_TYPE_TAP)
+             strncpy(temp_host_dev_name, bridge_line->text().toUtf8().constData(), sizeof(temp_host_dev_name) - 1);
++#endif
++#ifdef __APPLE__
++        else if (vmnet_type_uses_interface(net_cards_conf[i].net_type))
++            strncpy(temp_host_dev_name, network_devs[cbox->currentData().toInt()].device, sizeof(temp_host_dev_name) - 1);
++        else if (is_vmnet_type(net_cards_conf[i].net_type))
++            strncpy(temp_host_dev_name, "none", sizeof(temp_host_dev_name) - 1);
++        if (net_cards_conf[i].net_type == NET_TYPE_VMNET_NAT) {
++            memset(temp_vmnet_guest_ip, '\0', sizeof(temp_vmnet_guest_ip));
++            strncpy(temp_vmnet_guest_ip, bridge_line->text().toUtf8().constData(), sizeof(temp_vmnet_guest_ip) - 1);
++        }
+ #endif
+         else if (net_cards_conf[i].net_type == NET_TYPE_NRSWITCH) {
+             memset(temp_nrs_hostname, '\0', sizeof(temp_nrs_hostname));
+@@ -277,6 +371,9 @@ SettingsNetwork::changed()
+         has_changed |= strcmp(temp_host_dev_name, net_cards_conf[i].host_dev_name[0] ? net_cards_conf[i].host_dev_name : "none");
+         has_changed |= strcmp(temp_secret,        net_cards_conf[i].secret);
+         has_changed |= strcmp(temp_nrs_hostname,  net_cards_conf[i].nrs_hostname);
++#ifdef __APPLE__
++        has_changed |= strcmp(temp_vmnet_guest_ip, net_cards_conf[i].vmnet_guest_ip);
++#endif
+     }
+ 
+     return has_changed ? (SETTINGS_CHANGED | SETTINGS_REQUIRE_HARD_RESET) : 0;
+@@ -309,6 +406,9 @@ SettingsNetwork::save(int soft)
+         auto *promisc_value          = findChild<QCheckBox *>(QString("boxPromisc%1").arg(i + 1));
+         auto *secret_value           = findChild<QLineEdit *>(QString("secretSwitch%1").arg(i + 1));
+         memset(net_cards_conf[i].host_dev_name, '\0', sizeof(net_cards_conf[i].host_dev_name));
++#ifdef __APPLE__
++        memset(net_cards_conf[i].vmnet_guest_ip, '\0', sizeof(net_cards_conf[i].vmnet_guest_ip));
++#endif
+         if (net_cards_conf[i].net_type == NET_TYPE_PCAP)
+             strncpy(net_cards_conf[i].host_dev_name, network_devs[cbox->currentData().toInt()].device, sizeof(net_cards_conf[i].host_dev_name) - 1);
+ #ifdef HAS_VDE
+@@ -318,6 +418,14 @@ SettingsNetwork::save(int soft)
+ #if defined(__unix__) || defined(__APPLE__)
+         else if (net_cards_conf[i].net_type == NET_TYPE_TAP)
+             strncpy(net_cards_conf[i].host_dev_name, bridge_line->text().toUtf8().constData(), sizeof(net_cards_conf[i].host_dev_name) - 1);
++#endif
++#ifdef __APPLE__
++        else if (vmnet_type_uses_interface(net_cards_conf[i].net_type))
++            strncpy(net_cards_conf[i].host_dev_name, network_devs[cbox->currentData().toInt()].device, sizeof(net_cards_conf[i].host_dev_name) - 1);
++        else if (is_vmnet_type(net_cards_conf[i].net_type))
++            strncpy(net_cards_conf[i].host_dev_name, "none", sizeof(net_cards_conf[i].host_dev_name) - 1);
++        if (net_cards_conf[i].net_type == NET_TYPE_VMNET_NAT)
++            strncpy(net_cards_conf[i].vmnet_guest_ip, bridge_line->text().toUtf8().constData(), sizeof(net_cards_conf[i].vmnet_guest_ip) - 1);
+ #endif
+         else if (net_cards_conf[i].net_type == NET_TYPE_NRSWITCH) {
+             memset(net_cards_conf[i].nrs_hostname, '\0', sizeof(net_cards_conf[i].nrs_hostname));
+@@ -411,6 +519,14 @@ SettingsNetwork::onCurrentMachineChanged(int machineId)
+ #ifdef ENABLE_NET_NRSWITCH
+         typeRows.add(tr("Remote Switch"), NET_TYPE_NRSWITCH);
+ #endif /* ENABLE_NET_NRSWITCH */
++#ifdef __APPLE__
++        if (network_devmap.has_vmnet) {
++            typeRows.add("vmnet Shared (NAT)", NET_TYPE_VMNET_NAT);
++            typeRows.add("vmnet Host-Only", NET_TYPE_VMNET_HOST);
++            typeRows.add("vmnet Bridged", NET_TYPE_VMNET_BRIDGE);
++            typeRows.add("vmnet Published IP", NET_TYPE_VMNET_PUB);
++        }
++#endif
+         typeRows.commit();
+ 
+         model->removeRows(0, removeRows);
+@@ -425,6 +541,11 @@ SettingsNetwork::onCurrentMachineChanged(int machineId)
+             removeRows                = model->rowCount();
+             Models::Batch intfRows(model);
+             for (int c = 0; c < network_ndev; c++) {
++#ifdef __APPLE__
++                if (vmnet_type_uses_interface(net_cards_conf[i].net_type) &&
++                    !vmnet_host_interface_is_valid(network_devs[c].device))
++                    continue;
++#endif
+                 intfRows.add(tr(network_devs[c].description), c);
+                 scDevice[i]->addDevice(nullptr, tr(network_devs[c].description));
+                 if (QString(network_devs[c].device) == currentPcapDevice) {
+@@ -449,6 +570,11 @@ SettingsNetwork::onCurrentMachineChanged(int machineId)
+             QString currentTapDevice = net_cards_conf[i].host_dev_name;
+             auto    editline         = findChild<QLineEdit *>(QString("bridgeTAPNIC%1").arg(i + 1));
+             editline->setText(currentTapDevice);
++#endif
++#ifdef __APPLE__
++        } else if (net_cards_conf[i].net_type == NET_TYPE_VMNET_NAT) {
++            auto *editline = findChild<QLineEdit *>(QString("bridgeTAPNIC%1").arg(i + 1));
++            editline->setText(net_cards_conf[i].vmnet_guest_ip);
+ #endif
+         } else if (net_cards_conf[i].net_type == NET_TYPE_NLSWITCH) {
+             auto *promisc_value = findChild<QCheckBox *>(QString("boxPromisc%1").arg(i + 1));
+diff --git a/src/network/net_vmnet.c b/src/network/net_vmnet.c
+new file mode 100644
+index 000000000..930fde428
+--- /dev/null
++++ b/src/network/net_vmnet.c
+@@ -0,0 +1,856 @@
++/*
++ * 86Box vmnet backend for macOS
++ *
++ * Socket-client version.
++ *
++ * This backend no longer calls vmnet.framework directly. Instead it talks to a
++ * privileged helper over a UNIX domain socket. The helper owns all vmnet API
++ * usage.
++ */
++
++#include <stdarg.h>
++#include <stdint.h>
++#include <stdio.h>
++#include <string.h>
++#include <stdlib.h>
++#include <stdbool.h>
++#include <poll.h>
++#include <unistd.h>
++#include <errno.h>
++#include <arpa/inet.h>
++#include <ifaddrs.h>
++#include <sys/socket.h>
++#include <sys/un.h>
++
++#define HAVE_STDARG_H
++#include <86box/86box.h>
++#include <86box/device.h>
++#include <86box/plat.h>
++#include <86box/thread.h>
++#include <86box/timer.h>
++#include <86box/network.h>
++#include <86box/net_event.h>
++
++#define VMNET_PKT_BATCH NET_QUEUE_LEN
++#define VMN_SOCK_PATH   "/var/run/vmnet-helper.sock"
++
++enum {
++    NET_EVENT_STOP = 0,
++    NET_EVENT_TX,
++    NET_EVENT_MAX
++};
++
++enum {
++    VMN_MODE_SHARED    = 1,
++    VMN_MODE_HOST      = 2,
++    VMN_MODE_BRIDGED   = 3,
++    VMN_MODE_PUBLISHED = 4
++};
++
++enum {
++    VMN_MSG_START      = 1,
++    VMN_MSG_START_OK   = 2,
++    VMN_MSG_START_ERR  = 3,
++    VMN_MSG_SEND_FRAME = 4,
++    VMN_MSG_RX_FRAME   = 5,
++    VMN_MSG_STOP       = 6,
++    VMN_MSG_STOPPED    = 7
++};
++
++typedef struct {
++    uint32_t type;
++    uint32_t length;
++} vmn_msg_hdr_t;
++
++typedef struct {
++    uint32_t mode;
++    uint32_t published_ip;
++    char     guest_ip[16];
++} vmn_start_req_t;
++
++typedef struct {
++    int32_t code;
++} vmn_start_err_t;
++
++typedef struct {
++    int          sock_fd;
++    netcard_t   *card;
++    thread_t    *poll_tid;
++    net_evt_t    tx_event;
++    net_evt_t    stop_event;
++    netpkt_t     pkt;
++    netpkt_t     pktv[VMNET_PKT_BATCH];
++    uint8_t      mac_addr[6];
++} net_vmnet_t;
++
++static void
++vmnet_log(const char *fmt, ...)
++{
++    va_list ap;
++    FILE *fp = fopen("/tmp/log", "a");
++    if (fp == NULL)
++        return;
++
++    va_start(ap, fmt);
++    vfprintf(fp, fmt, ap);
++    va_end(ap);
++
++    fflush(fp);
++    fclose(fp);
++}
++
++
++static void
++vmnet_log_mac(char *buf, size_t buf_sz, const uint8_t *mac)
++{
++    if (buf == NULL || buf_sz == 0)
++        return;
++
++    if (mac == NULL) {
++        snprintf(buf, buf_sz, "<null>");
++        return;
++    }
++
++    snprintf(buf, buf_sz, "%02x:%02x:%02x:%02x:%02x:%02x",
++             mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
++}
++
++static void
++vmnet_log_ipv4(char *buf, size_t buf_sz, const uint8_t *ip)
++{
++    if (buf == NULL || buf_sz == 0)
++        return;
++
++    if (ip == NULL) {
++        snprintf(buf, buf_sz, "<null>");
++        return;
++    }
++
++    snprintf(buf, buf_sz, "%u.%u.%u.%u", ip[0], ip[1], ip[2], ip[3]);
++}
++
++static void
++vmnet_log_frame_decode(const char *dir, const uint8_t *frame, size_t len)
++{
++    char     src_mac[18], dst_mac[18];
++    uint16_t ethertype;
++
++    if (dir == NULL)
++        dir = "PKT";
++
++    if (frame == NULL) {
++        vmnet_log("VMNET: %s frame=<null> len=%zu\n", dir, len);
++        return;
++    }
++
++    if (len < 14) {
++        vmnet_log("VMNET: %s short ethernet frame len=%zu\n", dir, len);
++        return;
++    }
++
++    vmnet_log_mac(dst_mac, sizeof(dst_mac), frame + 0);
++    vmnet_log_mac(src_mac, sizeof(src_mac), frame + 6);
++    ethertype = (uint16_t) (((uint16_t) frame[12] << 8) | frame[13]);
++
++    vmnet_log("VMNET: %s eth src=%s dst=%s type=0x%04x len=%zu\n",
++              dir, src_mac, dst_mac, ethertype, len);
++
++    if (ethertype == 0x0806) {
++        char     sender_mac[18], target_mac[18];
++        char     sender_ip[16], target_ip[16];
++        uint16_t opcode;
++
++        if (len < 42) {
++            vmnet_log("VMNET: %s arp short len=%zu\n", dir, len);
++            return;
++        }
++
++        opcode = (uint16_t) (((uint16_t) frame[20] << 8) | frame[21]);
++        vmnet_log_mac(sender_mac, sizeof(sender_mac), frame + 22);
++        vmnet_log_ipv4(sender_ip, sizeof(sender_ip), frame + 28);
++        vmnet_log_mac(target_mac, sizeof(target_mac), frame + 32);
++        vmnet_log_ipv4(target_ip, sizeof(target_ip), frame + 38);
++
++        vmnet_log("VMNET: %s arp op=%u sender=%s/%s target=%s/%s\n",
++                  dir, opcode, sender_mac, sender_ip, target_mac, target_ip);
++        return;
++    }
++
++    if (ethertype == 0x0800) {
++        char          src_ip[16], dst_ip[16];
++        const uint8_t *ip   = frame + 14;
++        size_t        iplen = len - 14;
++        uint8_t       ihl;
++        uint8_t       proto;
++
++        if (iplen < 20) {
++            vmnet_log("VMNET: %s ipv4 short len=%zu\n", dir, iplen);
++            return;
++        }
++
++        ihl   = (uint8_t) ((ip[0] & 0x0f) * 4);
++        proto = ip[9];
++        if (ihl < 20 || iplen < ihl) {
++            vmnet_log("VMNET: %s ipv4 bad-ihl ihl=%u iplen=%zu\n", dir, ihl, iplen);
++            return;
++        }
++
++        vmnet_log_ipv4(src_ip, sizeof(src_ip), ip + 12);
++        vmnet_log_ipv4(dst_ip, sizeof(dst_ip), ip + 16);
++        vmnet_log("VMNET: %s ipv4 %s -> %s proto=%u ttl=%u ihl=%u totlen=%u\n",
++                  dir, src_ip, dst_ip, proto, ip[8], ihl,
++                  (unsigned) (((uint16_t) ip[2] << 8) | ip[3]));
++
++        if (proto == 1) {
++            const uint8_t *icmp  = ip + ihl;
++            size_t        icmplen = iplen - ihl;
++            if (icmplen < 4) {
++                vmnet_log("VMNET: %s icmp short len=%zu\n", dir, icmplen);
++                return;
++            }
++            vmnet_log("VMNET: %s icmp type=%u code=%u\n",
++                      dir, icmp[0], icmp[1]);
++            return;
++        }
++
++        if (proto == 6) {
++            const uint8_t *tcp   = ip + ihl;
++            size_t        tcplen = iplen - ihl;
++            if (tcplen < 20) {
++                vmnet_log("VMNET: %s tcp short len=%zu\n", dir, tcplen);
++                return;
++            }
++            vmnet_log("VMNET: %s tcp sport=%u dport=%u flags=0x%02x\n",
++                      dir,
++                      (unsigned) (((uint16_t) tcp[0] << 8) | tcp[1]),
++                      (unsigned) (((uint16_t) tcp[2] << 8) | tcp[3]),
++                      tcp[13]);
++            return;
++        }
++
++        if (proto == 17) {
++            const uint8_t *udp   = ip + ihl;
++            size_t        udplen = iplen - ihl;
++            if (udplen < 8) {
++                vmnet_log("VMNET: %s udp short len=%zu\n", dir, udplen);
++                return;
++            }
++            vmnet_log("VMNET: %s udp sport=%u dport=%u len=%u\n",
++                      dir,
++                      (unsigned) (((uint16_t) udp[0] << 8) | udp[1]),
++                      (unsigned) (((uint16_t) udp[2] << 8) | udp[3]),
++                      (unsigned) (((uint16_t) udp[4] << 8) | udp[5]));
++            return;
++        }
++
++        return;
++    }
++
++    if (ethertype == 0x86dd) {
++        vmnet_log("VMNET: %s ipv6 len=%zu\n", dir, len - 14);
++        return;
++    }
++}
++
++static void
++net_vmnet_error(char *errbuf, const char *message)
++{
++    strncpy(errbuf, message, NET_DRV_ERRBUF_SIZE);
++    errbuf[NET_DRV_ERRBUF_SIZE - 1] = '\0';
++    vmnet_log("VMNET: %s\n", message);
++}
++
++static int
++vmnet_write_full(int fd, const void *buf, size_t len)
++{
++    const uint8_t *p = (const uint8_t *) buf;
++
++    while (len > 0) {
++        ssize_t n = write(fd, p, len);
++        if (n < 0) {
++            if (errno == EINTR)
++                continue;
++            return -1;
++        }
++        if (n == 0)
++            return -1;
++
++        p += n;
++        len -= (size_t) n;
++    }
++
++    return 0;
++}
++
++static int
++vmnet_read_full(int fd, void *buf, size_t len)
++{
++    uint8_t *p = (uint8_t *) buf;
++
++    while (len > 0) {
++        ssize_t n = read(fd, p, len);
++        if (n < 0) {
++            if (errno == EINTR)
++                continue;
++            return -1;
++        }
++        if (n == 0)
++            return -1;
++
++        p += n;
++        len -= (size_t) n;
++    }
++
++    return 0;
++}
++
++static int
++vmnet_send_msg(int fd, uint32_t type, const void *payload, uint32_t length)
++{
++    vmn_msg_hdr_t hdr;
++
++    hdr.type   = type;
++    hdr.length = length;
++
++    if (vmnet_write_full(fd, &hdr, sizeof(hdr)) < 0)
++        return -1;
++
++    if (length != 0 && payload != NULL) {
++        if (vmnet_write_full(fd, payload, length) < 0)
++            return -1;
++    }
++
++    return 0;
++}
++
++static int
++vmnet_drain_payload(int fd, uint32_t length)
++{
++    uint8_t scratch[4096];
++
++    while (length > 0) {
++        uint32_t chunk = (length > sizeof(scratch)) ? (uint32_t) sizeof(scratch) : length;
++        if (vmnet_read_full(fd, scratch, chunk) < 0)
++            return -1;
++        length -= chunk;
++    }
++
++    return 0;
++}
++
++static int
++vmnet_connect_socket(void)
++{
++    int fd = socket(AF_UNIX, SOCK_STREAM, 0);
++    if (fd < 0)
++        return -1;
++
++    struct sockaddr_un addr;
++    memset(&addr, 0, sizeof(addr));
++    addr.sun_family = AF_UNIX;
++    strncpy(addr.sun_path, VMN_SOCK_PATH, sizeof(addr.sun_path) - 1);
++
++    if (connect(fd, (struct sockaddr *) &addr, sizeof(addr)) < 0) {
++        close(fd);
++        return -1;
++    }
++
++    return fd;
++}
++
++static uint32_t
++vmnet_parse_published_ip(const char *spec)
++{
++    const char *ip;
++
++    if (spec == NULL || *spec == '\0')
++        return 0;
++
++    ip = strchr(spec, ':');
++    if (ip != NULL)
++        ip++;
++    else
++        ip = spec;
++
++    if (*ip == '\0')
++        return 0;
++
++    return (uint32_t) inet_addr(ip);
++}
++
++static uint32_t
++vmnet_get_ipv4_for_interface(const char *ifname)
++{
++    struct ifaddrs *ifaddr = NULL;
++    struct ifaddrs *ifa;
++    uint32_t        ip = 0;
++
++    if (ifname == NULL || *ifname == '\0')
++        return 0;
++
++    if (getifaddrs(&ifaddr) != 0)
++        return 0;
++
++    for (ifa = ifaddr; ifa != NULL; ifa = ifa->ifa_next) {
++        if (ifa->ifa_addr == NULL)
++            continue;
++
++        if ((ifa->ifa_addr->sa_family == AF_INET) && !strcmp(ifa->ifa_name, ifname)) {
++            const struct sockaddr_in *sa = (const struct sockaddr_in *) ifa->ifa_addr;
++            ip                           = sa->sin_addr.s_addr;
++            break;
++        }
++    }
++
++    freeifaddrs(ifaddr);
++    return ip;
++}
++
++static void
++vmnet_fill_start_req(vmn_start_req_t *req, const char *mode_spec)
++{
++    memset(req, 0, sizeof(*req));
++    req->mode = VMN_MODE_SHARED;
++
++    if (mode_spec == NULL || *mode_spec == '\0' ||
++        !strcmp(mode_spec, "shared") || !strcmp(mode_spec, "nat") ||
++        !strcmp(mode_spec, "vmnet-shared") || !strcmp(mode_spec, "vmnet-nat"))
++        return;
++
++    if (!strcmp(mode_spec, "host")) {
++        req->mode = VMN_MODE_HOST;
++        return;
++    }
++
++    if (!strcmp(mode_spec, "bridged")) {
++        req->mode = VMN_MODE_BRIDGED;
++        return;
++    }
++
++    if (!strcmp(mode_spec, "published") || !strcmp(mode_spec, "pub")) {
++        req->mode = VMN_MODE_PUBLISHED;
++        return;
++    }
++
++    if (!strncmp(mode_spec, "published:", 10) || !strncmp(mode_spec, "pub:", 4)) {
++        req->mode         = VMN_MODE_PUBLISHED;
++        req->published_ip = vmnet_parse_published_ip(mode_spec);
++        return;
++    }
++
++    if (!strcmp(mode_spec, "vmnet-shared")) {
++        req->mode = VMN_MODE_SHARED;
++        return;
++    }
++
++    if (!strcmp(mode_spec, "vmnet-host")) {
++        req->mode = VMN_MODE_HOST;
++        return;
++    }
++
++    if (!strcmp(mode_spec, "vmnet-bridged") || !strcmp(mode_spec, "vmnet-bridge")) {
++        req->mode = VMN_MODE_BRIDGED;
++        return;
++    }
++
++    if (!strcmp(mode_spec, "vmnet-published") || !strcmp(mode_spec, "vmnet-pub")) {
++        req->mode = VMN_MODE_PUBLISHED;
++        return;
++    }
++
++    if (!strncmp(mode_spec, "vmnet-published:", 16) || !strncmp(mode_spec, "vmnet-pub:", 10)) {
++        req->mode         = VMN_MODE_PUBLISHED;
++        req->published_ip = vmnet_parse_published_ip(mode_spec);
++        return;
++    }
++}
++
++static int
++vmnet_helper_start(int fd, const char *mode_spec, const char *host_ifname, const char *guest_ip_spec)
++{
++    vmn_start_req_t req;
++    vmn_msg_hdr_t   hdr;
++
++    vmnet_fill_start_req(&req, mode_spec);
++    memset(req.guest_ip, 0, sizeof(req.guest_ip));
++    if ((guest_ip_spec != NULL) && (*guest_ip_spec != '\0'))
++        strncpy(req.guest_ip, guest_ip_spec, sizeof(req.guest_ip) - 1);
++
++    if (req.mode == VMN_MODE_PUBLISHED && req.published_ip == 0)
++        req.published_ip = vmnet_get_ipv4_for_interface(host_ifname);
++
++    if (req.mode == VMN_MODE_PUBLISHED && req.published_ip == 0) {
++        vmnet_log("VMNET: published mode requested but no valid IPv4 found for interface %s\n",
++                  (host_ifname && *host_ifname) ? host_ifname : "(none)");
++        return -95;
++    }
++
++    vmnet_log("VMNET: sending START to helper mode=%u published_ip=0x%08x guest_ip=%s spec=%s iface=%s\n",
++              req.mode, req.published_ip,
++              req.guest_ip[0] ? req.guest_ip : "(none)",
++              mode_spec ? mode_spec : "(null)",
++              (host_ifname && *host_ifname) ? host_ifname : "(none)");
++    if (vmnet_send_msg(fd, VMN_MSG_START, &req, sizeof(req)) < 0)
++        return -1;
++
++    if (vmnet_read_full(fd, &hdr, sizeof(hdr)) < 0)
++        return -2;
++
++    vmnet_log("VMNET: helper replied type=%u length=%u\n", hdr.type, hdr.length);
++
++    if (hdr.type == VMN_MSG_START_OK) {
++        if (hdr.length != 0)
++            return vmnet_drain_payload(fd, hdr.length);
++        return 0;
++    }
++
++    if (hdr.type == VMN_MSG_START_ERR) {
++        vmn_start_err_t err;
++
++        if (hdr.length != sizeof(err))
++            return -3;
++        if (vmnet_read_full(fd, &err, sizeof(err)) < 0)
++            return -4;
++
++        vmnet_log("VMNET: helper START_ERR code=%d\n", err.code);
++        return (err.code != 0) ? err.code : -5;
++    }
++
++    if (hdr.length != 0)
++        vmnet_drain_payload(fd, hdr.length);
++
++    return -6;
++}
++
++static int
++vmnet_helper_stop(int fd)
++{
++    vmn_msg_hdr_t hdr;
++
++    vmnet_log("VMNET: sending STOP to helper\n");
++    if (vmnet_send_msg(fd, VMN_MSG_STOP, NULL, 0) < 0)
++        return -1;
++
++    if (vmnet_read_full(fd, &hdr, sizeof(hdr)) < 0)
++        return -2;
++
++    vmnet_log("VMNET: helper stop reply type=%u length=%u\n", hdr.type, hdr.length);
++
++    if (hdr.length != 0) {
++        if (vmnet_drain_payload(fd, hdr.length) < 0)
++            return -3;
++    }
++
++    return (hdr.type == VMN_MSG_STOPPED) ? 0 : -4;
++}
++
++static int
++vmnet_helper_send_frame(int fd, const uint8_t *frame, size_t len)
++{
++    if (len > UINT32_MAX)
++        return -1;
++
++#ifdef DEBUG
++    vmnet_log_frame_decode("TX", frame, len);
++#endif
++
++    if (vmnet_send_msg(fd, VMN_MSG_SEND_FRAME, frame, (uint32_t) len) < 0)
++        return -1;
++
++    return 0;
++}
++
++static int
++net_vmnet_rx_dispatch(net_vmnet_t *vmnet, const uint8_t *frame, size_t len)
++{
++    if (vmnet == NULL || frame == NULL || len == 0 || len > NET_MAX_FRAME)
++        return -1;
++
++    memcpy(vmnet->pkt.data, frame, len);
++    vmnet->pkt.len = (int) len;
++
++    if (!(net_cards_conf[vmnet->card->card_num].link_state & NET_LINK_DOWN))
++        network_rx_put_pkt(vmnet->card, &vmnet->pkt);
++
++    return 0;
++}
++
++static int
++vmnet_handle_socket_readable(net_vmnet_t *vmnet)
++{
++    vmn_msg_hdr_t hdr;
++
++    if (vmnet_read_full(vmnet->sock_fd, &hdr, sizeof(hdr)) < 0)
++        return -1;
++
++    //vmnet_log("VMNET: socket msg type=%u length=%u\n", hdr.type, hdr.length);
++
++    if (hdr.type == VMN_MSG_RX_FRAME) {
++        if (hdr.length == 0 || hdr.length > NET_MAX_FRAME) {
++            if (vmnet_drain_payload(vmnet->sock_fd, hdr.length) < 0)
++                return -1;
++            return 0;
++        }
++
++        if (vmnet_read_full(vmnet->sock_fd, vmnet->pkt.data, hdr.length) < 0)
++            return -1;
++
++#ifdef DEBUG
++        vmnet_log_frame_decode("RX", vmnet->pkt.data, hdr.length);
++#endif
++
++        vmnet->pkt.len = (int) hdr.length;
++        if (!(net_cards_conf[vmnet->card->card_num].link_state & NET_LINK_DOWN))
++            network_rx_put_pkt(vmnet->card, &vmnet->pkt);
++        return 0;
++    }
++
++    if (hdr.length != 0) {
++        if (vmnet_drain_payload(vmnet->sock_fd, hdr.length) < 0)
++            return -1;
++    }
++
++    return 0;
++}
++
++static void
++net_vmnet_thread(void *priv)
++{
++    net_vmnet_t *vmnet = (net_vmnet_t *) priv;
++    struct pollfd pfd[NET_EVENT_MAX + 1];
++
++    vmnet_log("VMNET: polling started\n");
++
++    pfd[NET_EVENT_STOP].fd     = net_event_get_fd(&vmnet->stop_event);
++    pfd[NET_EVENT_STOP].events = POLLIN | POLLPRI;
++
++    pfd[NET_EVENT_TX].fd     = net_event_get_fd(&vmnet->tx_event);
++    pfd[NET_EVENT_TX].events = POLLIN | POLLPRI;
++
++    pfd[NET_EVENT_MAX].fd     = vmnet->sock_fd;
++    pfd[NET_EVENT_MAX].events = POLLIN;
++
++    while (1) {
++        int prc = poll(pfd, NET_EVENT_MAX + 1, 10);
++        if (prc < 0) {
++            if (errno == EINTR)
++                continue;
++            vmnet_log("VMNET: poll failed errno=%d\n", errno);
++            break;
++        }
++
++        if (pfd[NET_EVENT_STOP].revents & POLLIN) {
++            net_event_clear(&vmnet->stop_event);
++            break;
++        }
++
++        if (pfd[NET_EVENT_TX].revents & POLLIN) {
++            int packets;
++
++            net_event_clear(&vmnet->tx_event);
++            packets = network_tx_popv(vmnet->card, vmnet->pktv, VMNET_PKT_BATCH);
++
++            if (!(net_cards_conf[vmnet->card->card_num].link_state & NET_LINK_DOWN)) {
++                for (int i = 0; i < packets; i++) {
++		    size_t len = (size_t)vmnet->pktv[i].len;
++
++		    if (len < 60) {
++			memset(vmnet->pktv[i].data+len,0,60-len);
++			len = 60;
++		    }
++
++    		    vmnet_log("VMNET: TX len=%zu dst=%02x:%02x:%02x:%02x:%02x:%02x\n",
++        		len,
++        		vmnet->pktv[i].data[0],
++        		vmnet->pktv[i].data[1],
++        		vmnet->pktv[i].data[2],
++        		vmnet->pktv[i].data[3],
++        		vmnet->pktv[i].data[4],
++        		vmnet->pktv[i].data[5]);
++
++                    int rc = vmnet_helper_send_frame(vmnet->sock_fd,
++                                                     vmnet->pktv[i].data,
++                                                     len);
++                    if (rc < 0)
++                        vmnet_log("VMNET: helper send_frame failed rc=%d len=%zu\n",
++                                  rc, len);
++                }
++            }
++        }
++
++        if (pfd[NET_EVENT_MAX].revents & (POLLIN | POLLPRI)) {
++            if (vmnet_handle_socket_readable(vmnet) < 0) {
++                vmnet_log("VMNET: helper socket read failed\n");
++                break;
++            }
++        }
++
++        if (pfd[NET_EVENT_MAX].revents & (POLLERR | POLLHUP | POLLNVAL)) {
++            vmnet_log("VMNET: helper socket hangup/error revents=0x%x\n",
++                      pfd[NET_EVENT_MAX].revents);
++            break;
++        }
++    }
++
++    vmnet_log("VMNET: polling stopped\n");
++}
++
++void
++net_vmnet_in_available(void *priv)
++{
++    net_vmnet_t *vmnet = (net_vmnet_t *) priv;
++    net_event_set(&vmnet->tx_event);
++}
++
++void *
++net_vmnet_init(const netcard_t *card, const uint8_t *mac_addr, void *priv, char *netdrv_errbuf)
++{
++    net_vmnet_t *vmnet = calloc(1, sizeof(net_vmnet_t));
++    int          rc;
++    const char  *mode_spec   = (const char *) priv;
++    const char  *host_ifname = NULL;
++    const char  *guest_ip    = NULL;
++
++    if (card != NULL) {
++        host_ifname = net_cards_conf[card->card_num].host_dev_name;
++        guest_ip    = net_cards_conf[card->card_num].vmnet_guest_ip;
++    }
++
++    pclog("VMNET INIT: mode='%s' host_if='%s'\n",
++          mode_spec ? mode_spec : "(null)",
++          (host_ifname && *host_ifname) ? host_ifname : "(none)");
++
++    vmnet_log("VMNET: net_vmnet_init entered priv=%s host_if=%s\n",
++              mode_spec ? mode_spec : "(null)",
++              (host_ifname && *host_ifname) ? host_ifname : "(none)");
++
++    if (vmnet == NULL) {
++        net_vmnet_error(netdrv_errbuf, "vmnet allocation failed");
++        return NULL;
++    }
++
++    vmnet->sock_fd = -1;
++    vmnet->card    = (netcard_t *) card;
++    memcpy(vmnet->mac_addr, mac_addr, sizeof(vmnet->mac_addr));
++
++    for (int i = 0; i < VMNET_PKT_BATCH; i++) {
++        vmnet->pktv[i].data = calloc(1, NET_MAX_FRAME);
++        if (vmnet->pktv[i].data == NULL) {
++            net_vmnet_error(netdrv_errbuf, "vmnet TX packet allocation failed");
++            for (int j = 0; j < i; j++)
++                free(vmnet->pktv[j].data);
++            free(vmnet);
++            return NULL;
++        }
++    }
++
++    vmnet->pkt.data = calloc(1, NET_MAX_FRAME);
++    if (vmnet->pkt.data == NULL) {
++        net_vmnet_error(netdrv_errbuf, "vmnet RX packet allocation failed");
++        for (int i = 0; i < VMNET_PKT_BATCH; i++)
++            free(vmnet->pktv[i].data);
++        free(vmnet);
++        return NULL;
++    }
++
++    net_event_init(&vmnet->tx_event);
++    net_event_init(&vmnet->stop_event);
++
++    vmnet_log("VMNET: connecting to helper socket %s\n", VMN_SOCK_PATH);
++    vmnet->sock_fd = vmnet_connect_socket();
++    if (vmnet->sock_fd < 0) {
++        net_vmnet_error(netdrv_errbuf,
++                        "failed to connect to vmnet helper; start the helper first");
++        net_event_close(&vmnet->tx_event);
++        net_event_close(&vmnet->stop_event);
++        for (int i = 0; i < VMNET_PKT_BATCH; i++)
++            free(vmnet->pktv[i].data);
++        free(vmnet->pkt.data);
++        free(vmnet);
++        return NULL;
++    }
++
++    rc = vmnet_helper_start(vmnet->sock_fd, mode_spec, host_ifname, guest_ip);
++    vmnet_log("VMNET: vmnet_helper_start rc=%d\n", rc);
++    if (rc != 0) {
++        char buf[NET_DRV_ERRBUF_SIZE];
++        snprintf(buf, sizeof(buf), "vmnet helper start failed: %d", rc);
++        net_vmnet_error(netdrv_errbuf, buf);
++
++        close(vmnet->sock_fd);
++        net_event_close(&vmnet->tx_event);
++        net_event_close(&vmnet->stop_event);
++        for (int i = 0; i < VMNET_PKT_BATCH; i++)
++            free(vmnet->pktv[i].data);
++        free(vmnet->pkt.data);
++        free(vmnet);
++        return NULL;
++    }
++
++    vmnet->poll_tid = thread_create(net_vmnet_thread, vmnet);
++
++    vmnet_log("VMNET: initialized for card %d, MAC=%02x:%02x:%02x:%02x:%02x:%02x\n",
++              vmnet->card->card_num,
++              mac_addr[0], mac_addr[1], mac_addr[2],
++              mac_addr[3], mac_addr[4], mac_addr[5]);
++
++    return vmnet;
++}
++
++void
++net_vmnet_close(void *priv)
++{
++    net_vmnet_t *vmnet = (net_vmnet_t *) priv;
++
++    if (!vmnet)
++        return;
++
++    vmnet_log("VMNET: closing\n");
++
++    net_event_set(&vmnet->stop_event);
++
++    vmnet_log("VMNET: waiting for thread to end...\n");
++    thread_wait(vmnet->poll_tid);
++    vmnet_log("VMNET: thread ended\n");
++
++    if (vmnet->sock_fd >= 0) {
++        int rc = vmnet_helper_stop(vmnet->sock_fd);
++        vmnet_log("VMNET: vmnet_helper_stop rc=%d\n", rc);
++        close(vmnet->sock_fd);
++        vmnet->sock_fd = -1;
++    }
++
++    net_event_close(&vmnet->tx_event);
++    net_event_close(&vmnet->stop_event);
++
++    for (int i = 0; i < VMNET_PKT_BATCH; i++)
++        free(vmnet->pktv[i].data);
++    free(vmnet->pkt.data);
++
++    free(vmnet);
++}
++
++int
++net_vmnet_prepare(netdev_t *list)
++{
++    vmnet_log("VMNET: net_vmnet_prepare entered\n");
++
++#ifdef __APPLE__
++    memset(list, 0, sizeof(netdev_t));
++
++    strncpy(list->device, "vmnet-shared", sizeof(list->device) - 1);
++    strncpy(list->description, "Apple vmnet", sizeof(list->description) - 1);
++
++    return 1;
++#else
++    (void) list;
++    return 0;
++#endif
++}
++
++const netdrv_t net_vmnet_drv = {
++    .notify_in = &net_vmnet_in_available,
++    .init      = &net_vmnet_init,
++    .close     = &net_vmnet_close,
++    .priv      = NULL
++};
+diff --git a/vmnet/Makefile b/vmnet/Makefile
+new file mode 100644
+index 000000000..bbfd7f379
+--- /dev/null
++++ b/vmnet/Makefile
+@@ -0,0 +1,29 @@
++CC=clang
++CFLAGS=-Wall -Wextra -O2 -fblocks -mmacosx-version-min=13.0
++OBJCFLAGS=$(CFLAGS) -fobjc-arc
++LDFLAGS_HELPER=-framework vmnet
++
++SRC_DIR=src
++OBJ_DIR=build/obj
++BIN_DIR=build
++
++HELPER=$(BIN_DIR)/vmnet-helper
++
++.PHONY: all clean
++
++all: $(HELPER)
++
++$(OBJ_DIR):
++	mkdir -p $(OBJ_DIR)
++
++$(BIN_DIR):
++	mkdir -p $(BIN_DIR)
++
++$(OBJ_DIR)/vmnet_helper.o: $(SRC_DIR)/vmnet_helper.m $(SRC_DIR)/vmnet_proto.h | $(OBJ_DIR)
++	$(CC) $(OBJCFLAGS) -c $< -o $@
++
++$(HELPER): $(OBJ_DIR)/vmnet_helper.o | $(BIN_DIR)
++	$(CC) $(OBJCFLAGS) $< $(LDFLAGS_HELPER) -o $@
++
++clean:
++	rm -rf build
+diff --git a/vmnet/README.md b/vmnet/README.md
+new file mode 100644
+index 000000000..7eb107c17
+--- /dev/null
++++ b/vmnet/README.md
+@@ -0,0 +1,53 @@
++# MacBox vmnet launchd package
++
++This package turns the working vmnet helper into a LaunchDaemon-based service so
++MacBox/86Box can stay unprivileged and connect to a root-owned helper over a
++UNIX socket.
++
++## What changed in this fixed version
++
++The helper now stays alive and accepts multiple client sessions instead of
++handling one connection and exiting. That avoids the socket disappearing between
++VM runs.
++
++## Layout
++
++- `src/vmnet_helper.m` - root helper that owns vmnet
++- `src/vmnet_proto.h` - shared protocol/socket path
++- `launchd/com.macbox.vmnethelper.plist` - LaunchDaemon plist
++- `scripts/install-launchd.sh` - install and start service
++- `scripts/uninstall-launchd.sh` - stop and remove service
++- `scripts/status-launchd.sh` - quick status check
++
++## Build
++
++```bash
++make clean
++make
++```
++
++## Install
++
++```bash
++sudo ./scripts/install-launchd.sh
++```
++
++## Check status
++
++```bash
++./scripts/status-launchd.sh
++```
++
++## Remove
++
++```bash
++sudo ./scripts/uninstall-launchd.sh
++```
++
++
++## UI-supplied guest IP
++
++`vmn_start_req_t` now includes a `guest_ip` field (IPv4 in network byte order). The helper no longer relies on a compiled-in guest IP.
++
++- Shared / Host / Bridged modes: the helper accepts and logs `guest_ip` for future use.
++- Published mode: `guest_ip` is required and is used when building PF/NAT rules.
+diff --git a/vmnet/launchd/com.macbox.vmnethelper.plist b/vmnet/launchd/com.macbox.vmnethelper.plist
+new file mode 100644
+index 000000000..e40efc8b1
+--- /dev/null
++++ b/vmnet/launchd/com.macbox.vmnethelper.plist
+@@ -0,0 +1,28 @@
++<?xml version="1.0" encoding="UTF-8"?>
++<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
++<plist version="1.0">
++<dict>
++    <key>Label</key>
++    <string>com.macbox.vmnethelper</string>
++
++    <key>ProgramArguments</key>
++    <array>
++        <string>/usr/local/libexec/macbox-vmnet-helper</string>
++    </array>
++
++    <key>RunAtLoad</key>
++    <true/>
++
++    <key>KeepAlive</key>
++    <true/>
++
++    <key>UserName</key>
++    <string>root</string>
++
++    <key>StandardOutPath</key>
++    <string>/tmp/vmnet-helper.log</string>
++
++    <key>StandardErrorPath</key>
++    <string>/tmp/vmnet-helper.log</string>
++</dict>
++</plist>
+diff --git a/vmnet/scripts/install-launchd.sh b/vmnet/scripts/install-launchd.sh
+new file mode 100755
+index 000000000..073147e0d
+--- /dev/null
++++ b/vmnet/scripts/install-launchd.sh
+@@ -0,0 +1,34 @@
++#!/bin/bash
++set -euo pipefail
++
++LABEL="com.macbox.vmnethelper"
++PLIST_SRC="launchd/${LABEL}.plist"
++PLIST_DST="/Library/LaunchDaemons/${LABEL}.plist"
++HELPER_SRC="build/vmnet-helper"
++HELPER_DST="/usr/local/libexec/macbox-vmnet-helper"
++
++if [[ $EUID -ne 0 ]]; then
++    echo "Run as root: sudo $0"
++    exit 1
++fi
++
++if [[ ! -f "$HELPER_SRC" ]]; then
++    echo "Missing $HELPER_SRC. Build first with: make"
++    exit 1
++fi
++
++mkdir -p /usr/local/libexec
++install -m 755 "$HELPER_SRC" "$HELPER_DST"
++install -m 644 "$PLIST_SRC" "$PLIST_DST"
++
++chown root:wheel "$HELPER_DST" "$PLIST_DST"
++
++launchctl bootout system "$PLIST_DST" >/dev/null 2>&1 || true
++launchctl bootstrap system "$PLIST_DST"
++launchctl enable "system/${LABEL}"
++launchctl kickstart -k "system/${LABEL}"
++
++echo "Installed and started ${LABEL}"
++echo "Socket: /var/run/vmnet-helper.sock"
++echo "Logs:"
++plutil -p launchd/com.macbox.vmnethelper.plist | grep -E 'StandardOutPath|StandardErrorPath'
+diff --git a/vmnet/scripts/status-launchd.sh b/vmnet/scripts/status-launchd.sh
+new file mode 100755
+index 000000000..994e3a8bc
+--- /dev/null
++++ b/vmnet/scripts/status-launchd.sh
+@@ -0,0 +1,16 @@
++#!/bin/bash
++set -euo pipefail
++
++LABEL="com.macbox.vmnethelper"
++
++echo "launchctl print:"
++launchctl print "system/${LABEL}" || true
++echo
++echo "socket:"
++ls -l /var/run/vmnet-helper.sock || true
++echo
++echo "process:"
++ps aux | grep macbox-vmnet-helper | grep -v grep || true
++echo
++echo "logs:"
++ls -l /tmp/vmnet-helper*.log || true
+diff --git a/vmnet/scripts/uninstall-launchd.sh b/vmnet/scripts/uninstall-launchd.sh
+new file mode 100755
+index 000000000..8b9bd30f5
+--- /dev/null
++++ b/vmnet/scripts/uninstall-launchd.sh
+@@ -0,0 +1,18 @@
++#!/bin/bash
++set -euo pipefail
++
++LABEL="com.macbox.vmnethelper"
++PLIST_DST="/Library/LaunchDaemons/${LABEL}.plist"
++HELPER_DST="/usr/local/libexec/macbox-vmnet-helper"
++
++if [[ $EUID -ne 0 ]]; then
++    echo "Run as root: sudo $0"
++    exit 1
++fi
++
++launchctl bootout system "$PLIST_DST" >/dev/null 2>&1 || true
++rm -f "$PLIST_DST"
++rm -f "$HELPER_DST"
++rm -f /var/run/vmnet-helper.sock
++
++echo "Removed ${LABEL}"
+diff --git a/vmnet/src/vmnet_helper.m b/vmnet/src/vmnet_helper.m
+new file mode 100644
+index 000000000..ae57905a9
+--- /dev/null
++++ b/vmnet/src/vmnet_helper.m
+@@ -0,0 +1,760 @@
++#include <dispatch/dispatch.h>
++#include <poll.h>
++#include <stdbool.h>
++#include <stdint.h>
++#include <stdio.h>
++#include <stdarg.h>
++#include <stdlib.h>
++#include <string.h>
++#include <arpa/inet.h>
++#include <ifaddrs.h>
++#include <sys/socket.h>
++#include <sys/stat.h>
++#include <sys/types.h>
++#include <sys/uio.h>
++#include <sys/un.h>
++#include <unistd.h>
++#include <xpc/xpc.h>
++#include <vmnet/vmnet.h>
++
++#include "vmnet_proto.h"
++
++enum {
++    HELPER_MAX_FRAME = 4096,
++    HELPER_DRAIN_LIMIT = 64
++};
++
++typedef struct {
++    interface_ref iface;
++    dispatch_queue_t queue;
++    dispatch_semaphore_t start_sema;
++    dispatch_semaphore_t event_sema;
++    dispatch_semaphore_t stop_sema;
++    vmnet_return_t start_status;
++    vmnet_return_t stop_status;
++    bool stopping;
++    bool published_active;
++    char published_iface[32];
++    char published_ip[INET_ADDRSTRLEN];
++    char guest_ip[INET_ADDRSTRLEN];
++} helper_vmnet_t;
++
++#define HELPER_PF_ANCHOR "com.macbox.vmnethelper"
++#define HELPER_PF_RULES  "/tmp/com.macbox.vmnethelper.pf"
++
++typedef enum {
++    HELPER_LOG_ERROR = 0,
++    HELPER_LOG_INFO  = 1,
++    HELPER_LOG_DEBUG = 2
++} helper_log_level_t;
++
++static helper_log_level_t helper_log_level(void)
++{
++    const char *env = getenv("VMNET_HELPER_LOG");
++    if (!env || !*env) return HELPER_LOG_INFO;
++    if (strcmp(env, "0") == 0 || strcasecmp(env, "error") == 0) return HELPER_LOG_ERROR;
++    if (strcmp(env, "2") == 0 || strcasecmp(env, "debug") == 0 || strcasecmp(env, "trace") == 0) return HELPER_LOG_DEBUG;
++    return HELPER_LOG_INFO;
++}
++
++static int helper_should_log(helper_log_level_t level)
++{
++    return level <= helper_log_level();
++}
++
++static int vmnet_setup_published(helper_vmnet_t *s, uint32_t published_ip);
++static void vmnet_cleanup_published(helper_vmnet_t *s);
++
++static void log_line_level(helper_log_level_t level, const char *fmt, ...)
++{
++    va_list ap;
++    FILE *fp;
++    if (!helper_should_log(level)) return;
++    fp = fopen("/tmp/vmnet-helper.log", "a");
++    if (!fp) return;
++    fprintf(fp, "[%ld] ", (long)getpid());
++    va_start(ap, fmt);
++    vfprintf(fp, fmt, ap);
++    va_end(ap);
++    fflush(fp);
++    fclose(fp);
++}
++
++#define log_error(...) log_line_level(HELPER_LOG_ERROR, __VA_ARGS__)
++#define log_info(...)  log_line_level(HELPER_LOG_INFO, __VA_ARGS__)
++#define log_debug(...) log_line_level(HELPER_LOG_DEBUG, __VA_ARGS__)
++
++static int write_full(int fd, const void *buf, size_t len)
++{
++    const uint8_t *p = (const uint8_t *)buf;
++    while (len > 0) {
++        ssize_t n = write(fd, p, len);
++        if (n <= 0) return -1;
++        p += n;
++        len -= (size_t)n;
++    }
++    return 0;
++}
++
++static int read_full(int fd, void *buf, size_t len)
++{
++    uint8_t *p = (uint8_t *)buf;
++    while (len > 0) {
++        ssize_t n = read(fd, p, len);
++        if (n <= 0) return -1;
++        p += n;
++        len -= (size_t)n;
++    }
++    return 0;
++}
++
++static int send_msg(int fd, uint32_t type, const void *payload, uint32_t length)
++{
++    vmn_msg_hdr_t hdr;
++    hdr.type = type;
++    hdr.length = length;
++    if (write_full(fd, &hdr, sizeof(hdr)) < 0) return -1;
++    if (length && payload) {
++        if (write_full(fd, payload, length) < 0) return -1;
++    }
++    return 0;
++}
++
++static void helper_vmnet_init(helper_vmnet_t *s)
++{
++    s->iface = NULL;
++    s->queue = NULL;
++    s->start_sema = NULL;
++    s->event_sema = NULL;
++    s->stop_sema = NULL;
++    s->start_status = VMNET_FAILURE;
++    s->stop_status = VMNET_FAILURE;
++    s->stopping = false;
++    s->published_active = false;
++    s->published_iface[0] = 0;
++    s->published_ip[0] = 0;
++    s->guest_ip[0] = 0;
++}
++
++static int run_cmd(const char *cmd)
++{
++    int rc;
++    log_debug("HELPER: cmd: %s\n", cmd);
++    rc = system(cmd);
++    if (rc != 0)
++        log_error("HELPER: cmd failed rc=%d cmd=%s\n", rc, cmd);
++    else
++        log_debug("HELPER: cmd rc=%d\n", rc);
++    return rc;
++}
++
++static int read_cmd_first_line(const char *cmd, char *buf, size_t buf_size)
++{
++    FILE *fp;
++    size_t len;
++
++    if (!buf || buf_size == 0)
++        return -1;
++
++    buf[0] = 0;
++    fp = popen(cmd, "r");
++    if (!fp)
++        return -1;
++
++    if (!fgets(buf, (int)buf_size, fp)) {
++        pclose(fp);
++        buf[0] = 0;
++        return -1;
++    }
++
++    pclose(fp);
++    len = strlen(buf);
++    while (len > 0 && (buf[len - 1] == '\n' || buf[len - 1] == '\r' ||
++                        buf[len - 1] == ' ' || buf[len - 1] == '\t')) {
++        buf[--len] = 0;
++    }
++    return (len > 0) ? 0 : -1;
++}
++
++static int detect_default_interface(char *buf, size_t buf_size)
++{
++    int rc = read_cmd_first_line(
++        "/sbin/route -n get default 2>/dev/null | /usr/bin/awk '/interface:/{print $2; exit}'",
++        buf,
++        buf_size
++    );
++    if (rc == 0)
++        log_info("HELPER: default interface=%s\n", buf);
++    else
++        log_error("HELPER: unable to detect default interface\n");
++    return rc;
++}
++
++static void helper_set_guest_ip(helper_vmnet_t *s, const char *guest_ip)
++{
++    struct in_addr addr;
++
++    if (!s)
++        return;
++
++    s->guest_ip[0] = 0;
++    if ((guest_ip == NULL) || (*guest_ip == '\0')) {
++        log_info("HELPER: no guest_ip supplied by client\n");
++        return;
++    }
++
++    if (inet_pton(AF_INET, guest_ip, &addr) != 1) {
++        log_error("HELPER: invalid guest_ip from client: %s\n", guest_ip);
++        return;
++    }
++
++    strncpy(s->guest_ip, guest_ip, sizeof(s->guest_ip) - 1);
++    s->guest_ip[sizeof(s->guest_ip) - 1] = '\0';
++    log_info("HELPER: guest_ip from client=%s\n", s->guest_ip);
++}
++
++static void vmnet_stop_sync(helper_vmnet_t *s)
++{
++    if (!s || !s->iface) return;
++
++    s->stopping = true;
++    s->stop_status = VMNET_FAILURE;
++    log_info("HELPER: stopping vmnet interface\n");
++    vmnet_stop_interface(s->iface, s->queue, ^(vmnet_return_t status) {
++        s->stop_status = status;
++        if (status != VMNET_SUCCESS)
++            log_error("HELPER: stop callback status=%d\n", (int)status);
++        else
++            log_debug("HELPER: stop callback status=%d\n", (int)status);
++        dispatch_semaphore_signal(s->stop_sema);
++    });
++
++    (void)dispatch_semaphore_wait(
++        s->stop_sema,
++        dispatch_time(DISPATCH_TIME_NOW, 5LL * NSEC_PER_SEC)
++    );
++
++    s->iface = NULL;
++}
++
++static int vmnet_start_with_mode(helper_vmnet_t *s, uint64_t mode)
++{
++    helper_vmnet_init(s);
++    s->queue = dispatch_queue_create("vmnet-helper.queue", DISPATCH_QUEUE_SERIAL);
++    s->start_sema = dispatch_semaphore_create(0);
++    s->event_sema = dispatch_semaphore_create(0);
++    s->stop_sema = dispatch_semaphore_create(0);
++
++    xpc_object_t desc = xpc_dictionary_create(NULL, NULL, 0);
++    xpc_dictionary_set_uint64(desc, vmnet_operation_mode_key, mode);
++
++    char *desc_txt = xpc_copy_description(desc);
++    if (desc_txt) {
++        log_debug("HELPER: start descriptor=%s\n", desc_txt);
++        free(desc_txt);
++    }
++
++    log_info("HELPER: calling vmnet_start_interface() mode=%llu\n", (unsigned long long)mode);
++    s->iface = vmnet_start_interface(desc, s->queue, ^(vmnet_return_t status, xpc_object_t params) {
++        s->start_status = status;
++        if (status == VMNET_SUCCESS)
++            log_info("HELPER: start callback status=%d\n", (int)status);
++        else
++            log_error("HELPER: start callback status=%d\n", (int)status);
++        if (params) {
++            char *params_txt = xpc_copy_description(params);
++            if (params_txt) {
++                log_debug("HELPER: start callback params=%s\n", params_txt);
++                free(params_txt);
++            }
++        } else {
++            log_debug("HELPER: start callback params=NULL\n");
++        }
++        dispatch_semaphore_signal(s->start_sema);
++    });
++
++    if (!s->iface) {
++        log_error("HELPER: vmnet_start_interface returned NULL\n");
++        return -2;
++    }
++
++    long wait_rc = dispatch_semaphore_wait(
++        s->start_sema,
++        dispatch_time(DISPATCH_TIME_NOW, 5LL * NSEC_PER_SEC)
++    );
++    if (wait_rc == 0 && s->start_status == VMNET_SUCCESS)
++        log_info("HELPER: vmnet interface started successfully\n");
++    else
++        log_error("HELPER: start wait_rc=%ld start_status=%d\n", wait_rc, (int)s->start_status);
++
++    if (wait_rc != 0) {
++        vmnet_stop_sync(s);
++        return -3;
++    }
++    if (s->start_status != VMNET_SUCCESS) {
++        vmnet_stop_sync(s);
++        return -4;
++    }
++
++    log_debug("HELPER: installing packets-available callback\n");
++    vmnet_interface_set_event_callback(
++        s->iface,
++        VMNET_INTERFACE_PACKETS_AVAILABLE,
++        s->queue,
++        ^(interface_event_t event_id, xpc_object_t event) {
++            (void)event_id;
++            (void)event;
++            if (!s->stopping && s->event_sema) {
++                dispatch_semaphore_signal(s->event_sema);
++            }
++        }
++    );
++    return 0;
++}
++
++static int vmnet_start_shared(helper_vmnet_t *s)
++{
++    return vmnet_start_with_mode(s, VMNET_SHARED_MODE);
++}
++
++static int vmnet_start_host(helper_vmnet_t *s)
++{
++	(void)s;
++#ifdef VMNET_HOST_MODE
++    return vmnet_start_with_mode(s, VMNET_HOST_MODE);
++#else
++    log_info("HELPER: VMNET_HOST_MODE not available in this SDK");
++    return -97;
++#endif
++}
++
++static int vmnet_start_bridged(helper_vmnet_t *s)
++{
++	(void)s;
++#ifdef VMNET_BRIDGED_MODE
++    return vmnet_start_with_mode(s, VMNET_BRIDGED_MODE);
++#else
++    log_info("HELPER: VMNET_BRIDGED_MODE not available in this SDK");
++    return -96;
++#endif
++}
++
++static void vmnet_cleanup_published(helper_vmnet_t *s)
++{
++    char cmd[512];
++
++    if (!s)
++        return;
++
++    run_cmd("/sbin/pfctl -a " HELPER_PF_ANCHOR " -F all >/dev/null 2>&1");
++    unlink(HELPER_PF_RULES);
++
++    if (s->published_iface[0] && s->published_ip[0]) {
++        snprintf(cmd, sizeof(cmd),
++                 "/sbin/ifconfig %s -alias %s >/dev/null 2>&1",
++                 s->published_iface, s->published_ip);
++        run_cmd(cmd);
++    }
++
++    s->published_active = false;
++    s->published_iface[0] = 0;
++    s->published_ip[0] = 0;
++}
++
++static int vmnet_setup_published(helper_vmnet_t *s, uint32_t published_ip)
++{
++    char ipbuf[INET_ADDRSTRLEN];
++    char iface[32];
++    char cmd[1024];
++    FILE *fp;
++    struct in_addr addr;
++
++    if (!s) {
++        log_error("HELPER: published mode requested with NULL state\n");
++        return -95;
++    }
++
++    addr.s_addr = published_ip;
++    if (published_ip == 0 || inet_ntop(AF_INET, &addr, ipbuf, sizeof(ipbuf)) == NULL) {
++        log_error("HELPER: published mode requested but no valid published_ip supplied\n");
++        return -95;
++    }
++
++    if (detect_default_interface(iface, sizeof(iface)) != 0) {
++        log_error("HELPER: unable to detect default interface for published mode\n");
++        return -94;
++    }
++
++    snprintf(s->published_iface, sizeof(s->published_iface), "%s", iface);
++    snprintf(s->published_ip, sizeof(s->published_ip), "%s", ipbuf);
++
++    snprintf(cmd, sizeof(cmd),
++             "/sbin/ifconfig %s alias %s netmask 255.255.255.0",
++             s->published_iface, s->published_ip);
++    if (run_cmd(cmd) != 0) {
++        log_error("HELPER: failed to add alias %s on %s\n", s->published_ip, s->published_iface);
++        vmnet_cleanup_published(s);
++        return -93;
++    }
++
++    if (run_cmd("/usr/sbin/sysctl -w net.inet.ip.forwarding=1 >/dev/null 2>&1") != 0) {
++        log_error("HELPER: failed to enable IPv4 forwarding\n");
++        vmnet_cleanup_published(s);
++        return -92;
++    }
++
++    fp = fopen(HELPER_PF_RULES, "w");
++    if (!fp) {
++        log_error("HELPER: failed to open PF rules file %s\n", HELPER_PF_RULES);
++        vmnet_cleanup_published(s);
++        return -91;
++    }
++
++    fprintf(fp,
++            "rdr pass on %s inet proto icmp from any to %s -> %s\n"
++            "rdr pass on %s inet proto tcp from any to %s -> %s\n"
++            "rdr pass on %s inet proto udp from any to %s -> %s\n"
++            "nat on %s inet from %s to any -> (%s)\n",
++            s->published_iface, s->published_ip, s->guest_ip,
++            s->published_iface, s->published_ip, s->guest_ip,
++            s->published_iface, s->published_ip, s->guest_ip,
++            s->published_iface, s->guest_ip, s->published_iface);
++    fclose(fp);
++
++    run_cmd("/sbin/pfctl -E >/dev/null 2>&1");
++    snprintf(cmd, sizeof(cmd),
++             "/sbin/pfctl -a %s -f %s >/dev/null 2>&1",
++             HELPER_PF_ANCHOR, HELPER_PF_RULES);
++    if (run_cmd(cmd) != 0) {
++        log_error("HELPER: failed to load PF rules for published mode\n");
++        vmnet_cleanup_published(s);
++        return -90;
++    }
++
++    s->published_active = true;
++    log_info("HELPER: published mode active iface=%s published_ip=%s guest_ip=%s\n",
++             s->published_iface, s->published_ip, s->guest_ip);
++    return 0;
++}
++
++static int vmnet_send_frame(helper_vmnet_t *s, const uint8_t *frame, size_t len)
++{
++    struct iovec iov;
++    iov.iov_base = (void *)frame;
++    iov.iov_len = len;
++
++    struct vmpktdesc pkt;
++    memset(&pkt, 0, sizeof(pkt));
++    pkt.vm_pkt_iov = &iov;
++    pkt.vm_pkt_iovcnt = 1;
++    pkt.vm_pkt_size = len;
++
++    int pkt_count = 1;
++    vmnet_return_t rc = vmnet_write(s->iface, &pkt, &pkt_count);
++    if (rc != VMNET_SUCCESS) {
++        log_error("HELPER: vmnet_write rc=%d pkt_count=%d len=%zu\n", (int)rc, pkt_count, len);
++        return -1;
++    }
++    return pkt_count;
++}
++
++static int vmnet_read_one(helper_vmnet_t *s, uint8_t *buf, size_t buf_size, size_t *out_len)
++{
++    struct iovec iov;
++    iov.iov_base = buf;
++    iov.iov_len = buf_size;
++
++    struct vmpktdesc pkt;
++    memset(&pkt, 0, sizeof(pkt));
++    pkt.vm_pkt_iov = &iov;
++    pkt.vm_pkt_iovcnt = 1;
++    pkt.vm_pkt_size = buf_size;
++
++    int pkt_count = 1;
++    vmnet_return_t rc = vmnet_read(s->iface, &pkt, &pkt_count);
++    if (rc != VMNET_SUCCESS) {
++        log_error("HELPER: vmnet_read rc=%d pkt_count=%d\n", (int)rc, pkt_count);
++        return -1;
++    }
++    if (pkt_count <= 0) {
++        *out_len = 0;
++        return 0;
++    }
++    *out_len = (size_t)pkt.vm_pkt_size;
++    return 1;
++}
++
++static int drain_vmnet(helper_vmnet_t *s, int fd)
++{
++    while (dispatch_semaphore_wait(s->event_sema, DISPATCH_TIME_NOW) == 0) {
++        for (int i = 0; i < HELPER_DRAIN_LIMIT; i++) {
++            uint8_t buf[HELPER_MAX_FRAME];
++            size_t len = 0;
++            int rc = vmnet_read_one(s, buf, sizeof(buf), &len);
++            if (rc < 0) return -1;
++            if (rc == 0) break;
++            if (send_msg(fd, VMN_MSG_RX_FRAME, buf, (uint32_t)len) < 0) return -1;
++        }
++    }
++    return 0;
++}
++
++static int make_server_socket(void)
++{
++    int fd = socket(AF_UNIX, SOCK_STREAM, 0);
++    if (fd < 0) return -1;
++
++    struct sockaddr_un addr;
++    memset(&addr, 0, sizeof(addr));
++    addr.sun_family = AF_UNIX;
++    strncpy(addr.sun_path, VMN_SOCK_PATH, sizeof(addr.sun_path) - 1);
++
++    unlink(VMN_SOCK_PATH);
++
++    if (bind(fd, (struct sockaddr *)&addr, sizeof(addr)) < 0) {
++        close(fd);
++        return -1;
++    }
++
++    chmod(VMN_SOCK_PATH, 0666);
++
++    if (listen(fd, 8) < 0) {
++        close(fd);
++        unlink(VMN_SOCK_PATH);
++        return -1;
++    }
++
++    return fd;
++}
++
++static void handle_client_session(int fd)
++{
++    helper_vmnet_t vmnet;
++    helper_vmnet_init(&vmnet);
++
++    bool running = true;
++    bool started = false;
++
++    log_info("HELPER: client connected\n");
++
++    while (running) {
++        struct pollfd pfd;
++        pfd.fd = fd;
++        pfd.events = POLLIN;
++        pfd.revents = 0;
++
++        int prc = poll(&pfd, 1, 10);
++        if (prc < 0) {
++            log_error("HELPER: poll failed\n");
++            break;
++        }
++
++        if (started) {
++            if (drain_vmnet(&vmnet, fd) < 0) {
++                log_error("HELPER: drain_vmnet failed\n");
++                break;
++            }
++        }
++
++        if (prc == 0) {
++            continue;
++        }
++
++        vmn_msg_hdr_t hdr;
++        if (read_full(fd, &hdr, sizeof(hdr)) < 0) {
++            log_info("HELPER: peer closed connection\n");
++            break;
++        }
++
++        if (hdr.type == VMN_MSG_START) {
++            vmn_start_req_t req;
++            uint8_t old_req[8];
++            memset(&req, 0, sizeof(req));
++
++            if (hdr.length == sizeof(req)) {
++                if (read_full(fd, &req, sizeof(req)) < 0) {
++                    log_error("HELPER: failed to read full START payload (%zu bytes)\n", sizeof(req));
++                    break;
++                }
++            } else if (hdr.length == sizeof(old_req)) {
++                if (read_full(fd, old_req, sizeof(old_req)) < 0) {
++                    log_error("HELPER: failed to read legacy START payload (%zu bytes)\n", sizeof(old_req));
++                    break;
++                }
++                memcpy(&req.mode, old_req, sizeof(old_req));
++                req.guest_ip[0] = '\0';
++                log_info("HELPER: accepted legacy START payload hdr.length=%u\n", hdr.length);
++            } else {
++                log_error("HELPER: bad START payload hdr.length=%u expected=%zu or %zu\n",
++                          hdr.length, sizeof(req), sizeof(old_req));
++                break;
++            }
++            {
++                struct in_addr dbg_pub_addr;
++                char dbg_pub_ip[INET_ADDRSTRLEN];
++                dbg_pub_addr.s_addr = req.published_ip;
++                dbg_pub_ip[0] = 0;
++                if (req.published_ip != 0) {
++                    if (inet_ntop(AF_INET, &dbg_pub_addr, dbg_pub_ip, sizeof(dbg_pub_ip)) == NULL)
++                        snprintf(dbg_pub_ip, sizeof(dbg_pub_ip), "<inet_ntop failed>");
++                } else {
++                    snprintf(dbg_pub_ip, sizeof(dbg_pub_ip), "<none>");
++                }
++                log_info("HELPER: START req.mode=%u published_ip=0x%08x (%s) guest_ip=%s\n",
++                         req.mode, req.published_ip, dbg_pub_ip,
++                         req.guest_ip[0] ? req.guest_ip : "<none>");
++                log_debug("HELPER: mode constants shared=%u host=%u bridged=%u published=%u\n",
++                         (unsigned)VMN_MODE_SHARED,
++                         (unsigned)VMN_MODE_HOST,
++                         (unsigned)VMN_MODE_BRIDGED,
++                         (unsigned)VMN_MODE_PUBLISHED);
++            }
++
++            helper_set_guest_ip(&vmnet, req.guest_ip);
++
++            int rc = -99;
++            switch (req.mode) {
++                case VMN_MODE_SHARED:
++                    log_info("HELPER: starting shared mode\n");
++                    rc = vmnet_start_shared(&vmnet);
++                    break;
++                case VMN_MODE_HOST:
++                    log_info("HELPER: starting host mode\n");
++                    rc = vmnet_start_host(&vmnet);
++                    break;
++                case VMN_MODE_BRIDGED:
++                    log_info("HELPER: starting bridged mode\n");
++                    rc = vmnet_start_bridged(&vmnet);
++                    break;
++                case VMN_MODE_PUBLISHED: {
++                    int prc;
++                    log_info("HELPER: starting published mode\n");
++
++                    rc = vmnet_start_shared(&vmnet);
++                    if (rc == 0)
++                        log_info("HELPER: shared mode ready\n");
++                    else
++                        log_error("HELPER: shared mode start failed rc=%d\n", rc);
++
++                    if (rc != 0) {
++                        log_error("HELPER: shared start failed\n");
++                        break;
++                    }
++
++                    prc = vmnet_setup_published(&vmnet, req.published_ip);
++                    if (prc == 0) {
++                        log_info("HELPER: published mode ready iface=%s pub_ip=%s guest_ip=%s\n",
++                                 vmnet.published_iface[0] ? vmnet.published_iface : "<none>",
++                                 vmnet.published_ip[0] ? vmnet.published_ip : "<none>",
++                                 vmnet.guest_ip[0] ? vmnet.guest_ip : "<none>");
++                    } else {
++                        log_error("HELPER: published setup failed rc=%d; continuing with shared vmnet only\n", prc);
++                    }
++
++                    /* IMPORTANT: keep rc = 0 */
++                    rc = 0;
++                    break;
++                }
++
++                default:
++                    log_error("HELPER: unknown mode %u\n", req.mode);
++                    rc = -98;
++                    break;
++            }
++            if (rc == 0)
++                log_info("HELPER: session started mode=%u\n", req.mode);
++            else
++                log_error("HELPER: start failed rc=%d mode=%u\n", rc, req.mode);
++
++            if (rc == 0) {
++                started = true;
++                log_debug("HELPER: sending START_OK\n");
++                send_msg(fd, VMN_MSG_START_OK, NULL, 0);
++            } else {
++                log_error("HELPER: sending START_ERR code=%d\n", rc);
++                if (vmnet.iface)
++                    vmnet_stop_sync(&vmnet);
++                vmn_start_err_t err;
++                err.code = rc;
++                send_msg(fd, VMN_MSG_START_ERR, &err, sizeof(err));
++            }
++        } else if (hdr.type == VMN_MSG_SEND_FRAME) {
++            if (!started || hdr.length == 0 || hdr.length > HELPER_MAX_FRAME) {
++                if (hdr.length) {
++                    uint8_t scratch[4096];
++                    size_t remaining = hdr.length;
++                    while (remaining > 0) {
++                        size_t chunk = remaining > sizeof(scratch) ? sizeof(scratch) : remaining;
++                        if (read_full(fd, scratch, chunk) < 0) break;
++                        remaining -= chunk;
++                    }
++                }
++                continue;
++            }
++
++            uint8_t buf[HELPER_MAX_FRAME];
++            if (read_full(fd, buf, hdr.length) < 0) break;
++            vmnet_send_frame(&vmnet, buf, hdr.length);
++        } else if (hdr.type == VMN_MSG_STOP) {
++            if (hdr.length) {
++                uint8_t scratch[256];
++                size_t remaining = hdr.length;
++                while (remaining > 0) {
++                    size_t chunk = remaining > sizeof(scratch) ? sizeof(scratch) : remaining;
++                    if (read_full(fd, scratch, chunk) < 0) break;
++                    remaining -= chunk;
++                }
++            }
++            send_msg(fd, VMN_MSG_STOPPED, NULL, 0);
++            running = false;
++        } else {
++            if (hdr.length) {
++                uint8_t scratch[4096];
++                size_t remaining = hdr.length;
++                while (remaining > 0) {
++                    size_t chunk = remaining > sizeof(scratch) ? sizeof(scratch) : remaining;
++                    if (read_full(fd, scratch, chunk) < 0) break;
++                    remaining -= chunk;
++                }
++            }
++            log_error("HELPER: unknown msg type=%u\n", hdr.type);
++        }
++    }
++
++    if (vmnet.published_active) {
++        log_info("HELPER: cleaning up published state\n");
++        vmnet_cleanup_published(&vmnet);
++    }
++
++    if (started) {
++        log_info("HELPER: stopping vmnet session\n");
++        vmnet_stop_sync(&vmnet);
++    }
++
++    close(fd);
++    log_info("HELPER: client disconnected\n");
++}
++
++int main(void)
++{
++    log_info("HELPER: starting server on %s\n", VMN_SOCK_PATH);
++
++    int listen_fd = make_server_socket();
++    if (listen_fd < 0) {
++        log_error("HELPER: failed to create listen socket\n");
++        return 1;
++    }
++
++    for (;;) {
++        int fd = accept(listen_fd, NULL, NULL);
++        if (fd < 0) {
++            log_error("HELPER: accept failed\n");
++            sleep(1);
++            continue;
++        }
++
++        handle_client_session(fd);
++    }
++
++    return 0;
++}
+diff --git a/vmnet/src/vmnet_proto.h b/vmnet/src/vmnet_proto.h
+new file mode 100644
+index 000000000..2da8a6b47
+--- /dev/null
++++ b/vmnet/src/vmnet_proto.h
+@@ -0,0 +1,36 @@
++#pragma once
++#include <stdint.h>
++
++#define VMN_SOCK_PATH "/var/run/vmnet-helper.sock"
++
++enum {
++    VMN_MODE_SHARED    = 1,
++    VMN_MODE_HOST      = 2,
++    VMN_MODE_BRIDGED   = 3,
++    VMN_MODE_PUBLISHED = 4
++};
++
++enum {
++    VMN_MSG_START      = 1,
++    VMN_MSG_START_OK   = 2,
++    VMN_MSG_START_ERR  = 3,
++    VMN_MSG_SEND_FRAME = 4,
++    VMN_MSG_RX_FRAME   = 5,
++    VMN_MSG_STOP       = 6,
++    VMN_MSG_STOPPED    = 7
++};
++
++typedef struct {
++    uint32_t type;
++    uint32_t length;
++} vmn_msg_hdr_t;
++
++typedef struct {
++    uint32_t mode;
++    uint32_t published_ip; /* network byte order; used by published mode */
++    char     guest_ip[16]; /* dotted-quad guest static IP chosen in UI */
++} vmn_start_req_t;
++
++typedef struct {
++    int32_t code;
++} vmn_start_err_t;
