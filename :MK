@@ -1,0 +1,5 @@
+cmake --preset llvm-macos-aarch64.cmake
+cmake --build out/build/llvm-macos-aarch64.cmake -j"$(sysctl -n hw.ncpu)"
+cmake --install out/build/llvm-macos-aarch64.cmake
+ditto /Users/rcoley/git/86Box/build/artifacts/86Box.app \
+      /Users/rcoley/MacBox/86Box.app
